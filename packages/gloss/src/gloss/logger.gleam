@@ -1,0 +1,227 @@
+//// Structured logging shared by the application and every gloss library.
+////
+//// A `Logger` is a destination for `Entry`s. Build one from a channel
+//// (`stderr`, `otp`, `memory`, `discard`, or `new` with your own writer),
+//// shape it with `min_level`, `with_context` and `stack`, then write to it
+//// with `debug`, `info`, `warning` and `error`:
+////
+//// ```gleam
+//// let log =
+////   logger.stack([
+////     logger.stderr(),
+////     logger.otp() |> logger.min_level(logger.Warning),
+////   ])
+////   |> logger.with_context([#("app", meta.String("billing"))])
+//// logger.info(log, "transfer completed", [#("transfer", meta.String("t-17"))])
+//// ```
+////
+//// To log everything a `Tracer` sees, attach `trace_handler`:
+//// `tracer.new() |> tracer.handle(logger.trace_handler(log))`.
+////
+//// ## Writer contract
+////
+//// Writers run inline in the calling process. They must be cheap and must
+//// not panic, for the same reasons as tracer handlers.
+
+import gleam/erlang/atom.{type Atom}
+import gleam/erlang/process.{type Subject}
+import gleam/io
+import gleam/list
+import gleam/option.{None, Some}
+import gleam/time/calendar
+import gleam/time/duration
+import gleam/time/timestamp.{type Timestamp}
+import gloss/meta.{type Meta}
+import gloss/tracer
+
+pub type Level {
+  Debug
+  Info
+  Warning
+  Error
+}
+
+pub type Entry {
+  Entry(level: Level, message: String, meta: Meta, at: Timestamp)
+}
+
+pub type Writer =
+  fn(Entry) -> Nil
+
+pub opaque type Logger {
+  Logger(write: fn(Entry) -> Nil)
+}
+
+pub fn new(write: Writer) -> Logger {
+  Logger(write:)
+}
+
+/// Deliver an entry as-is, without stamping the time.
+pub fn write(logger: Logger, record: Entry) -> Nil {
+  logger.write(record)
+}
+
+/// Write every entry to each logger, in order.
+pub fn stack(loggers: List(Logger)) -> Logger {
+  Logger(fn(record) {
+    use logger <- list.each(loggers)
+    logger.write(record)
+  })
+}
+
+/// Drop entries below `level`.
+pub fn min_level(logger: Logger, level: Level) -> Logger {
+  let floor = rank(level)
+  Logger(fn(record) {
+    case rank(record.level) >= floor {
+      True -> logger.write(record)
+      False -> Nil
+    }
+  })
+}
+
+/// Prepend `context` to every entry's meta. Context added earlier comes first.
+pub fn with_context(logger: Logger, context: Meta) -> Logger {
+  Logger(fn(record) {
+    logger.write(Entry(..record, meta: list.append(context, record.meta)))
+  })
+}
+
+/// Write an entry at `level`, stamped with the current time.
+pub fn log(logger: Logger, level: Level, message: String, meta: Meta) -> Nil {
+  logger.write(Entry(level:, message:, meta:, at: timestamp.system_time()))
+}
+
+pub fn debug(logger: Logger, message: String, meta: Meta) -> Nil {
+  log(logger, Debug, message, meta)
+}
+
+pub fn info(logger: Logger, message: String, meta: Meta) -> Nil {
+  log(logger, Info, message, meta)
+}
+
+pub fn warning(logger: Logger, message: String, meta: Meta) -> Nil {
+  log(logger, Warning, message, meta)
+}
+
+pub fn error(logger: Logger, message: String, meta: Meta) -> Nil {
+  log(logger, Error, message, meta)
+}
+
+/// One `format`ted line per entry on standard error.
+pub fn stderr() -> Logger {
+  Logger(fn(record) { io.println_error(format(record)) })
+}
+
+/// Send every entry to `subject`. For tests.
+pub fn memory(subject: Subject(Entry)) -> Logger {
+  Logger(process.send(subject, _))
+}
+
+/// Throw entries away.
+pub fn discard() -> Logger {
+  Logger(fn(_) { Nil })
+}
+
+/// Forward to Erlang's `logger` at the same level, with the meta both
+/// inlined into the message (so the default OTP handler shows it) and
+/// attached as metadata with atom keys (so formatter templates and other
+/// handlers can read it).
+///
+/// OTP's primary level defaults to `notice`, which drops `Info` and
+/// `Debug`; raise it with `logger:set_primary_config(level, info)` or in
+/// `sys.config`.
+pub fn otp() -> Logger {
+  Logger(fn(record) {
+    otp_log(level_atom(record.level), with_meta(record), record.meta)
+  })
+}
+
+@external(erlang, "gloss@logger_ffi", "log")
+fn otp_log(level: Atom, message: String, meta: Meta) -> Nil
+
+fn level_atom(level: Level) -> Atom {
+  atom.create(level_to_string(level))
+}
+
+/// The `stderr` line: RFC 3339 UTC time, level, message, then `meta.format`
+/// of the meta when there is any.
+///
+/// ```gleam
+/// // 2026-10-06T12:00:00Z info transfer completed transfer="t-17" count=3
+/// ```
+pub fn format(record: Entry) -> String {
+  timestamp.to_rfc3339(record.at, calendar.utc_offset)
+  <> " "
+  <> level_to_string(record.level)
+  <> " "
+  <> with_meta(record)
+}
+
+/// The message followed by the formatted meta, when there is any.
+fn with_meta(record: Entry) -> String {
+  case record.meta {
+    [] -> record.message
+    entries -> record.message <> " " <> meta.format(entries)
+  }
+}
+
+pub fn level_to_string(level: Level) -> String {
+  case level {
+    Debug -> "debug"
+    Info -> "info"
+    Warning -> "warning"
+    Error -> "error"
+  }
+}
+
+fn rank(level: Level) -> Int {
+  case level {
+    Debug -> 0
+    Info -> 1
+    Warning -> 2
+    Error -> 3
+  }
+}
+
+/// A tracer handler that logs every event as `from_event` describes.
+pub fn trace_handler(logger: Logger) -> tracer.Handler {
+  fn(event) { logger.write(from_event(event)) }
+}
+
+/// The entry for a tracer event. The message is `source` and `name`
+/// separated by a space. A `Point` keeps its level, meta and time. A
+/// `Span` is stamped at its end, carries `duration_ms` after the event's
+/// meta, and is `Info` when it succeeded or `Error` with an `error` entry
+/// when it failed.
+pub fn from_event(event: tracer.Event) -> Entry {
+  let message = event.source <> " " <> event.name
+
+  case event {
+    tracer.Point(at:, meta: event_meta, level:, ..) -> {
+      Entry(level: from_tracer_level(level), message:, meta: event_meta, at:)
+    }
+    tracer.Span(at:, meta: event_meta, duration:, error:, ..) -> {
+      let took = #("duration_ms", meta.Int(duration.to_milliseconds(duration)))
+      let #(level, extra) = case error {
+        None -> #(Info, [took])
+        Some(e) -> #(Error, [took, #("error", meta.String(e))])
+      }
+      Entry(
+        level:,
+        message:,
+        meta: list.append(event_meta, extra),
+        at: timestamp.add(at, duration),
+      )
+    }
+  }
+}
+
+fn from_tracer_level(level: tracer.Level) -> Level {
+  case level {
+    tracer.Debug -> Debug
+    tracer.Info -> Info
+    tracer.Warning -> Warning
+    tracer.Error -> Error
+  }
+}
