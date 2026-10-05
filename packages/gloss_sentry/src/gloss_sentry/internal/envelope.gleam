@@ -1,0 +1,271 @@
+//// The Sentry event payload and the envelope that carries it, as pure
+//// functions from data to JSON and to an HTTP request.
+
+import gleam/bit_array
+import gleam/http.{Post}
+import gleam/http/request.{type Request}
+import gleam/json.{type Json}
+import gleam/list
+import gleam/option.{None, Some}
+import gleam/string
+import gleam/time/calendar
+import gleam/time/timestamp.{type Timestamp}
+import gloss/meta.{type Meta, type Value}
+import gloss_sentry/internal/dsn.{type Dsn}
+
+/// `entity.ecosystem.flavor`, per Sentry's SDK interface.
+pub const sdk_name = "gloss.gleam.sentry"
+
+pub const sdk_version = "0.1.0"
+
+/// `sentry_client` in the auth header and the `user-agent`.
+pub const client = "gloss_sentry/0.1.0"
+
+pub type Level {
+  Fatal
+  Error
+  Warning
+  Info
+  Debug
+}
+
+/// One stack frame. Empty strings and a zero line mean unknown and are
+/// left out of the JSON.
+pub type Frame {
+  Frame(module: String, function: String, filename: String, line: Int)
+}
+
+pub type Body {
+  /// A log-like event with no exception.
+  Message(formatted: String)
+  /// An exception. `frames` run oldest to newest; the last one raised.
+  Exception(
+    type_: String,
+    value: String,
+    frames: List(Frame),
+    mechanism: String,
+    handled: Bool,
+  )
+}
+
+pub type Breadcrumb {
+  Breadcrumb(
+    at: Timestamp,
+    category: String,
+    message: String,
+    level: Level,
+    data: Meta,
+  )
+}
+
+pub type Event {
+  Event(
+    /// 32 lowercase hex characters.
+    event_id: String,
+    at: Timestamp,
+    level: Level,
+    logger: String,
+    body: Body,
+    tags: List(#(String, String)),
+    extra: Meta,
+    /// Oldest first.
+    breadcrumbs: List(Breadcrumb),
+    environment: String,
+    /// Left out of the JSON when empty.
+    release: String,
+    server_name: String,
+  )
+}
+
+pub fn rfc3339(at: Timestamp) -> String {
+  timestamp.to_rfc3339(at, calendar.utc_offset)
+}
+
+pub fn level_string(level: Level) -> String {
+  case level {
+    Fatal -> "fatal"
+    Error -> "error"
+    Warning -> "warning"
+    Info -> "info"
+    Debug -> "debug"
+  }
+}
+
+pub fn value_json(value: Value) -> Json {
+  case value {
+    meta.String(s) -> json.string(s)
+    meta.Int(i) -> json.int(i)
+    meta.Float(f) -> json.float(f)
+    meta.Bool(b) -> json.bool(b)
+  }
+}
+
+fn meta_json(entries: Meta) -> Json {
+  json.object(list.map(entries, fn(entry) { #(entry.0, value_json(entry.1)) }))
+}
+
+pub fn event_json(event: Event) -> Json {
+  let sdk =
+    json.object([
+      #("name", json.string(sdk_name)),
+      #("version", json.string(sdk_version)),
+    ])
+  let tags =
+    list.map(event.tags, fn(tag) {
+      #(tag.0, json.string(string.slice(tag.1, 0, 200)))
+    })
+  json.object(
+    list.flatten([
+      [
+        #("event_id", json.string(event.event_id)),
+        #("timestamp", json.string(rfc3339(event.at))),
+        #("platform", json.string("other")),
+        #("level", json.string(level_string(event.level))),
+        #("logger", json.string(event.logger)),
+        #("environment", json.string(event.environment)),
+        #("server_name", json.string(event.server_name)),
+        #("sdk", sdk),
+        #("tags", json.object(tags)),
+        #("extra", meta_json(event.extra)),
+        #(
+          "breadcrumbs",
+          json.object([
+            #("values", json.array(event.breadcrumbs, breadcrumb_json)),
+          ]),
+        ),
+      ],
+      case event.release {
+        "" -> []
+        release -> [#("release", json.string(release))]
+      },
+      body_json(event.body),
+    ]),
+  )
+}
+
+fn body_json(body: Body) -> List(#(String, Json)) {
+  case body {
+    Message(formatted:) -> [
+      #("logentry", json.object([#("formatted", json.string(formatted))])),
+    ]
+    Exception(type_:, value:, frames:, mechanism:, handled:) -> {
+      let stacktrace = case frames {
+        [] -> []
+        _ -> [
+          #(
+            "stacktrace",
+            json.object([#("frames", json.array(frames, frame_json))]),
+          ),
+        ]
+      }
+      let exception =
+        json.object(
+          list.flatten([
+            [
+              #("type", json.string(type_)),
+              #("value", json.string(value)),
+              #(
+                "mechanism",
+                json.object([
+                  #("type", json.string(mechanism)),
+                  #("handled", json.bool(handled)),
+                ]),
+              ),
+            ],
+            stacktrace,
+          ]),
+        )
+      [
+        #(
+          "exception",
+          json.object([#("values", json.preprocessed_array([exception]))]),
+        ),
+      ]
+    }
+  }
+}
+
+fn frame_json(frame: Frame) -> Json {
+  let when = fn(condition, entry) {
+    case condition {
+      True -> [entry]
+      False -> []
+    }
+  }
+  json.object(
+    list.flatten([
+      [#("function", json.string(frame.function))],
+      when(frame.module != "", #("module", json.string(frame.module))),
+      when(frame.filename != "", #("filename", json.string(frame.filename))),
+      when(frame.line > 0, #("lineno", json.int(frame.line))),
+      [#("in_app", json.bool(string.ends_with(frame.filename, ".gleam")))],
+    ]),
+  )
+}
+
+fn breadcrumb_json(crumb: Breadcrumb) -> Json {
+  let type_ = case crumb.level {
+    Fatal | Error -> "error"
+    _ -> "default"
+  }
+  json.object([
+    #("timestamp", json.string(rfc3339(crumb.at))),
+    #("type", json.string(type_)),
+    #("category", json.string(crumb.category)),
+    #("message", json.string(crumb.message)),
+    #("level", json.string(level_string(crumb.level))),
+    #("data", meta_json(crumb.data)),
+  ])
+}
+
+/// The POST for one event: envelope header, item header and payload on
+/// three `\n`-terminated lines. `sent_at` is passed in so the output is
+/// deterministic.
+pub fn envelope(dsn: Dsn, event: Event, sent_at: Timestamp) -> Request(String) {
+  let payload = json.to_string(event_json(event))
+  let header =
+    json.object([
+      #("event_id", json.string(event.event_id)),
+      #("sent_at", json.string(rfc3339(sent_at))),
+      #(
+        "sdk",
+        json.object([
+          #("name", json.string(sdk_name)),
+          #("version", json.string(sdk_version)),
+        ]),
+      ),
+    ])
+  let item =
+    json.object([
+      #("type", json.string("event")),
+      #("content_type", json.string("application/json")),
+      #("length", json.int(bit_array.byte_size(bit_array.from_string(payload)))),
+    ])
+  let body =
+    json.to_string(header)
+    <> "\n"
+    <> json.to_string(item)
+    <> "\n"
+    <> payload
+    <> "\n"
+  let auth =
+    "Sentry sentry_version=7, sentry_client="
+    <> client
+    <> ", sentry_key="
+    <> dsn.public_key
+  let base =
+    request.new()
+    |> request.set_method(Post)
+    |> request.set_scheme(dsn.scheme)
+    |> request.set_host(dsn.host)
+    |> request.set_path(dsn.envelope_path(dsn))
+  let with_port = case dsn.port {
+    Some(port) -> request.set_port(base, port)
+    None -> base
+  }
+  with_port
+  |> request.set_header("content-type", "application/x-sentry-envelope")
+  |> request.set_header("user-agent", client)
+  |> request.set_header("x-sentry-auth", auth)
+  |> request.set_body(body)
+}
