@@ -1,0 +1,19 @@
+name = "gloss"
+version = "0.1.0"
+description = "A framework for building modern applications with Gleam"
+licenses = ["MIT"]
+internal_modules = ["gloss/internal/*"]
+
+[repository]
+type = "github"
+user = "glosslabs"
+repo = "gloss"
+path = "packages/gloss"
+
+[dependencies]
+gleam_erlang = ">= 1.3.0 and < 2.0.0"
+gleam_stdlib = ">= 1.0.5 and < 2.0.0"
+gleam_time = ">= 1.11.0 and < 2.0.0"
+
+[dev_dependencies]
+gleeunit = ">= 1.11.0 and < 2.0.0"
