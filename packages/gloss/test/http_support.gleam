@@ -9,6 +9,7 @@ import gleam/list
 import gleam/result
 import gloss/http/context.{type Context, type Handler, type Middleware, Context}
 import gloss/http/reply.{type Request, type Response}
+import gloss/http/traceparent
 import gloss/internal/http_reply_render as reply_render
 import gloss/logger
 import gloss/tracer
@@ -26,6 +27,7 @@ pub fn ctx(state: state) -> Context(state) {
     params: dict.new(),
     route: "",
     request_id: "test",
+    trace: traceparent.new(),
     log: logger.discard(),
     tracer: tracer.new(),
   )

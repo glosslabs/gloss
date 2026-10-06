@@ -68,6 +68,7 @@ import gleam/time/timestamp
 import gloss/http/context.{type Handler, type Middleware, Context}
 import gloss/http/reply.{type ErrorPage, type Request}
 import gloss/http/router.{type RouteError, type Router}
+import gloss/http/traceparent.{type TraceParent}
 import gloss/internal/http_reply_render.{type Wire} as reply_render
 import gloss/internal/http_server_connection as connection
 import gloss/internal/http_server_control as control
@@ -461,12 +462,17 @@ fn pipeline(
   builder: Builder(state),
   table: router.Table(state),
 ) -> fn(Request) -> Response(Wire) {
-  let Builder(state:, logger: log, tracer: trace, middleware:, error_page:, ..) =
+  let Builder(state:, logger: log, tracer:, middleware:, error_page:, ..) =
     builder
   fn(request: Request) {
     let at = timestamp.system_time()
     let started = monotonic_ns()
-    let request_id = request_id(request)
+    let upstream = traceparent.from_request(request)
+    let trace = case upstream {
+      Ok(parent) -> traceparent.child(parent)
+      Error(Nil) -> traceparent.new()
+    }
+    let request_id = request_id(request, trace)
 
     let #(route, params, handler) = case
       router.match(table, request.method, request.path)
@@ -481,8 +487,9 @@ fn pipeline(
         params:,
         route:,
         request_id:,
-        log: logger.with_context(log, log_context(request_id, route)),
-        tracer: trace,
+        trace:,
+        log: logger.with_context(log, log_context(request_id, trace, route)),
+        tracer: tracer,
       )
     let handler = wrap(handler, middleware)
 
@@ -499,12 +506,12 @@ fn pipeline(
       |> response.set_header("x-request-id", request_id)
       |> reply_render.render(request.get_header(request, "accept"), error_page)
 
-    tracer.emit(trace, fn() {
+    tracer.emit(tracer, fn() {
       tracer.Span(
         source:,
         name: span_name(request.method, route),
         at:,
-        meta: span_meta(request, route, response, request_id),
+        meta: span_meta(request, route, response, request_id, trace, upstream),
         duration: duration.nanoseconds(monotonic_ns() - started),
         error: failure,
       )
@@ -522,25 +529,35 @@ fn wrap(
   })
 }
 
-fn request_id(request: Request) -> String {
+/// The client's `x-request-id`, or else the trace id, so logs, spans and
+/// error reports for a request share one id.
+fn request_id(request: Request, trace: TraceParent) -> String {
   case request.get_header(request, "x-request-id") {
     Ok(id) ->
       case string.length(id) {
         n if n > 0 && n <= 128 -> id
-        _ -> random_id()
+        _ -> trace.trace_id
       }
-    Error(Nil) -> random_id()
+    Error(Nil) -> trace.trace_id
   }
 }
 
-fn log_context(request_id: String, route: String) -> meta.Meta {
-  case route {
-    "" -> [#("request_id", meta.String(request_id))]
-    _ -> [
-      #("request_id", meta.String(request_id)),
-      #("route", meta.String(route)),
-    ]
-  }
+fn log_context(
+  request_id: String,
+  trace: TraceParent,
+  route: String,
+) -> meta.Meta {
+  list.flatten([
+    [#("request_id", meta.String(request_id))],
+    case trace.trace_id == request_id {
+      True -> []
+      False -> [#("trace_id", meta.String(trace.trace_id))]
+    },
+    case route {
+      "" -> []
+      _ -> [#("route", meta.String(route))]
+    },
+  ])
 }
 
 fn span_name(method: http.Method, route: String) -> String {
@@ -555,8 +572,16 @@ fn span_meta(
   route: String,
   response: Response(Wire),
   request_id: String,
+  trace: TraceParent,
+  upstream: Result(TraceParent, Nil),
 ) -> meta.Meta {
-  [
+  let parent = case upstream {
+    Ok(parent) -> [#("parent_span_id", meta.String(parent.span_id))]
+    Error(Nil) -> []
+  }
+  list.append(parent, [
+    #("trace_id", meta.String(trace.trace_id)),
+    #("span_id", meta.String(trace.span_id)),
     #("method", meta.String(http.method_to_string(request.method))),
     #("path", meta.String(request.path)),
     #("route", meta.String(route)),
@@ -566,7 +591,7 @@ fn span_meta(
       Ok(bytes) -> #("bytes", meta.Int(bytes))
       Error(Nil) -> #("streamed", meta.Bool(True))
     },
-  ]
+  ])
 }
 
 fn ms(duration: Duration) -> Int {
@@ -582,6 +607,3 @@ fn monotonic_time(unit: Atom) -> Int
 
 @external(erlang, "gloss@http@server_ffi", "rescue")
 fn rescue(work: fn() -> a) -> Result(a, String)
-
-@external(erlang, "gloss@http@server_ffi", "random_id")
-fn random_id() -> String

@@ -85,6 +85,25 @@ pub fn flush_sends_one_log_envelope_test() {
   engine.handle(state, FlushLogs, now(), fn() { "id" }).1 |> should.equal([])
 }
 
+pub fn trace_id_meta_wins_test() {
+  let #(state, _) =
+    log(
+      fresh(),
+      entry(logger.Info, "x", [
+        #("request_id", meta.String("ffffffffffffffffffffffffffffffff")),
+        #("trace_id", meta.String("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")),
+      ]),
+    )
+  let assert #(_, [Post(request)]) =
+    engine.handle(state, FlushLogs, now(), fn() { "id" })
+  at(
+    payload(request),
+    ["items"],
+    decode.list(decode.at(["trace_id"], decode.string)),
+  )
+  |> should.equal(["eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"])
+}
+
 pub fn a_full_batch_is_sent_without_waiting_test() {
   let entries =
     list.repeat(Nil, engine.log_batch)

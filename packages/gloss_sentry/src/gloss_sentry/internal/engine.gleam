@@ -9,6 +9,7 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/order
+import gleam/result
 import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
@@ -192,17 +193,23 @@ fn flush_logs(state: State, now: Timestamp) -> #(State, List(Effect)) {
   }
 }
 
-/// A log carries the request's id as its trace id when the entry has a
-/// 32-character `request_id`, so a request's logs are grouped.
+/// A log joins the entry's trace: its `trace_id` meta, else a 32-character
+/// `request_id` (gloss/http uses the trace id as the request id), else the
+/// sender's own trace id.
 fn to_log(state: State, entry: logger.Entry) -> envelope.Log {
-  let trace_id = case meta.get(entry.meta, "request_id") {
-    Ok(meta.String(id)) ->
-      case string.length(id) == 32 {
-        True -> id
-        False -> state.settings.trace_id
+  let trace_id =
+    [meta.get(entry.meta, "trace_id"), meta.get(entry.meta, "request_id")]
+    |> list.find_map(fn(found) {
+      case found {
+        Ok(meta.String(id)) ->
+          case string.length(id) == 32 {
+            True -> Ok(id)
+            False -> Error(Nil)
+          }
+        _ -> Error(Nil)
       }
-    _ -> state.settings.trace_id
-  }
+    })
+    |> result.unwrap(state.settings.trace_id)
   let level = case entry.level {
     logger.Debug -> envelope.Debug
     logger.Info -> envelope.Info

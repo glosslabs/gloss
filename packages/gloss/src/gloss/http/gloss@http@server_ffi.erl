@@ -4,7 +4,7 @@
          sendfile/4, read_range/3, file_info/1, priv_dir/1, read_line/2,
          sha1/1, unmask/2, arm_raw/1, is_drain/1,
          next/2, read_body/3, drain_requested/0, request_drain/1, await_go/0,
-         go/1, rescue/1, random_id/0, http_date/0]).
+         go/1, rescue/1, http_date/0]).
 
 %% --- Sockets ----------------------------------------------------------------
 
@@ -234,10 +234,6 @@ describe_exception(Class, Reason, _) ->
 
 arity(Args) when is_list(Args) -> length(Args);
 arity(Arity) -> Arity.
-
-%% 32 lowercase hex characters: the size of a W3C trace id.
-random_id() ->
-    string:lowercase(binary:encode_hex(crypto:strong_rand_bytes(16))).
 
 %% An IMF-fixdate for the `date` header, e.g. `Tue, 06 Oct 2026 12:00:00 GMT`.
 http_date() ->

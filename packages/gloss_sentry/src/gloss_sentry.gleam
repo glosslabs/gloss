@@ -166,8 +166,9 @@ pub fn handler(sentry: Sentry) -> tracer.Handler {
 
 /// A log channel that sends entries to Sentry Logs. Entries are batched:
 /// up to 100 go out together, at most five seconds after the first one
-/// arrives. An entry with a 32-character `request_id` in its meta uses it
-/// as the Sentry trace id, so a request's logs are grouped together.
+/// arrives. An entry's `trace_id` meta (or a 32-character `request_id`,
+/// which gloss/http sets to the trace id) becomes its Sentry trace id, so a
+/// request's logs are grouped together.
 ///
 /// ```gleam
 /// let log = logger.stack([logger.stderr(), gloss_sentry.logger(sentry)])

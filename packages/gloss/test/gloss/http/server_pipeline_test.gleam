@@ -89,17 +89,49 @@ pub fn request_id_test() {
     )
   header(res, "x-request-id") |> should.equal("abc")
   let assert [logger.Entry(meta:, ..)] = drain(entries)
-  meta
-  |> should.equal([
+  let assert [
     #("request_id", meta.String("abc")),
+    #("trace_id", meta.String(trace_id)),
     #("route", meta.String("/notes/:id")),
     #("id", meta.Int(1)),
-  ])
+  ] = meta
+  string.length(trace_id) |> should.equal(32)
 
+  // Without one, the request id is the trace id, and logged once.
   let generated =
     server.handle(builder, request(http.Get, "/notes/1"))
     |> header("x-request-id")
   string.length(generated) |> should.equal(32)
+  let assert [logger.Entry(meta:, ..)] = drain(entries)
+  meta.get(meta, "request_id") |> should.equal(Ok(meta.String(generated)))
+  meta.get(meta, "trace_id") |> should.equal(Error(Nil))
+}
+
+pub fn trace_starts_or_continues_test() {
+  let #(builder, events) = traced()
+
+  // A new trace: ids in the span, no parent.
+  server.handle(builder, request(http.Get, "/notes/1"))
+  let assert [tracer.Span(meta: fresh, ..)] = drain(events)
+  let assert Ok(meta.String(trace_id)) = meta.get(fresh, "trace_id")
+  let assert Ok(meta.String(span_id)) = meta.get(fresh, "span_id")
+  string.length(trace_id) |> should.equal(32)
+  string.length(span_id) |> should.equal(16)
+  meta.get(fresh, "parent_span_id") |> should.equal(Error(Nil))
+
+  // An upstream trace is continued under a new span.
+  let upstream = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+  server.handle(
+    builder,
+    request(http.Get, "/notes/1") |> request.set_header("traceparent", upstream),
+  )
+  let assert [tracer.Span(meta: continued, ..)] = drain(events)
+  meta.get(continued, "trace_id")
+  |> should.equal(Ok(meta.String("4bf92f3577b34da6a3ce929d0e0e4736")))
+  meta.get(continued, "parent_span_id")
+  |> should.equal(Ok(meta.String("00f067aa0ba902b7")))
+  meta.get(continued, "span_id")
+  |> should.not_equal(Ok(meta.String("00f067aa0ba902b7")))
 }
 
 pub fn server_middleware_wraps_unmatched_requests_test() {

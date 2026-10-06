@@ -15,6 +15,7 @@
 import gleam/dict.{type Dict}
 import gleam/int
 import gloss/http/reply.{type Request, type Response}
+import gloss/http/traceparent.{type TraceParent}
 import gloss/logger.{type Logger}
 import gloss/tracer.{type Tracer}
 
@@ -28,8 +29,11 @@ pub type Context(state) {
     /// The template of the matched route, e.g. `"/notes/:id"`, or `""`
     /// when no route matched.
     route: String,
-    /// The `x-request-id` the client sent, or a generated one.
+    /// The `x-request-id` the client sent, or else the trace id.
     request_id: String,
+    /// The request's place in a distributed trace. Send
+    /// `traceparent.header(ctx.trace)` with calls to other services.
+    trace: TraceParent,
     /// The server's logger with `request_id` and `route` added to every
     /// entry.
     log: Logger,

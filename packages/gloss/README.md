@@ -76,6 +76,7 @@ pub fn show(_req: Request, ctx: Context(App)) -> Response {
 | `gloss/http/static` | Files from a directory via `sendfile`, with content types, ETag revalidation and `cache-control` |
 | `gloss/http/sse` | Server-sent events over a streamed response |
 | `gloss/http/websocket` | WebSocket upgrades: `on_init`/`on_message`/`on_close`, `send_text`/`send_binary`, messages from other processes |
+| `gloss/http/traceparent` | W3C Trace Context: continue or start a trace per request (`ctx.trace`), and propagate it to downstream calls |
 
 ### Errors follow the `Accept` header
 
@@ -105,7 +106,8 @@ server.new(routes(), state)
 
 Every request produces one `tracer.Span` from source `"gloss.http"`, named
 after its route (`"GET /notes/:id"`), with method, path, route, status,
-request id and size in its meta. A panic or 5xx status marks the span as
+request id, size, and the W3C trace ids (`trace_id`, `span_id`,
+`parent_span_id`) in its meta. A panic or 5xx status marks the span as
 failed. Wire the tracer once and the rest follows:
 
 ```gleam
