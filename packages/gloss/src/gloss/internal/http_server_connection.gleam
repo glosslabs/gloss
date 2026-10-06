@@ -223,6 +223,7 @@ fn network_body(
         }
       }
     },
+    limit: settings.max_body,
   )
 }
 

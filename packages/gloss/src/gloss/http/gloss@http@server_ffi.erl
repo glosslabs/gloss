@@ -5,7 +5,7 @@
          sha1/1, unmask/2, arm_raw/1, is_drain/1, http_date/1, pdict_get/1,
          gzip/1, gzip_open/0, gzip_chunk/2, gzip_finish/1,
          inflate_open/0, inflate/2, inflate_continue/1, inflate_end/1,
-         peer_address/1, ip_bytes/1,
+         peer_address/1, ip_bytes/1, find/2,
          next/2, read_body/3, drain_requested/0, request_drain/1, await_go/0,
          go/1, rescue/1, http_date/0]).
 
@@ -343,3 +343,10 @@ ip_bytes(Text) ->
 normalise({0, 0, 0, 0, 0, 16#ffff, AB, CD}) ->
     {AB bsr 8, AB band 255, CD bsr 8, CD band 255};
 normalise(Address) -> Address.
+
+%% The position of the first Needle in Haystack.
+find(Haystack, Needle) ->
+    case binary:match(Haystack, Needle) of
+        {Position, _} -> {ok, Position};
+        nomatch -> {error, nil}
+    end.

@@ -36,13 +36,19 @@
 //// the connection after the response.
 
 import gleam/bit_array
+import gleam/bool
 import gleam/dynamic/decode.{type Decoder}
 import gleam/erlang/process
 import gleam/http/request
+import gleam/int
 import gleam/json
 import gleam/list
+import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
+import gleam/uri
 import gloss/http/reply.{type Request, type RequestBody, type Response}
+import gloss/internal/http_multipart as multipart
 import gloss/internal/http_request_body as request_body
 
 pub type BodyError =
@@ -141,6 +147,190 @@ pub fn stream(
       }
     Error(error) -> Error(Failed(error))
   })
+}
+
+/// Fold each piece of the body into an accumulator as it arrives, then
+/// continue with the result. Return an `Error` from `on_chunk` to stop. Like
+/// `stream`, there is no size limit besides the ones `on_chunk` applies.
+pub fn fold(
+  req: Request,
+  init: acc,
+  on_chunk: fn(acc, BitArray) -> Result(acc, e),
+  next: fn(Result(acc, StreamError(e))) -> Response,
+) -> Response {
+  // The body hands chunks to a callback with no state of its own, so the
+  // accumulator waits in a mailbox between chunks.
+  let cell = process.new_subject()
+  let stopped = process.new_subject()
+  process.send(cell, init)
+  let result =
+    req.body.stream(fn(chunk) {
+      let assert Ok(acc) = process.receive(cell, 0)
+      case on_chunk(acc, chunk) {
+        Ok(acc) -> {
+          process.send(cell, acc)
+          True
+        }
+        Error(error) -> {
+          process.send(stopped, error)
+          False
+        }
+      }
+    })
+  next(case result {
+    Ok(_) -> {
+      let assert Ok(acc) = process.receive(cell, 0)
+      Ok(acc)
+    }
+    Error(request_body.Stopped) ->
+      case process.receive(stopped, 0) {
+        Ok(error) -> Error(Stopped(error))
+        Error(Nil) -> Error(Failed(request_body.Stopped))
+      }
+    Error(error) -> Error(Failed(error))
+  })
+}
+
+/// A submitted HTML form.
+pub type Form {
+  Form(
+    /// Text fields, in the order sent. A name can appear more than once.
+    values: List(#(String, String)),
+    /// Uploaded files, by field name, in the order sent.
+    files: List(#(String, UploadedFile)),
+  )
+}
+
+pub type UploadedFile {
+  UploadedFile(filename: String, content_type: String, data: BitArray)
+}
+
+/// Continue with the submitted form, sent as
+/// `application/x-www-form-urlencoded` or `multipart/form-data`. Files are
+/// held in memory, and the whole form must fit in the server's `max_body`
+/// (else `413`); stream large uploads with `gloss/http/multipart` instead.
+/// Answers `415` for other content types and `400` for malformed forms.
+pub fn form(req: Request, next: fn(Form) -> Response) -> Response {
+  let content_type =
+    request.get_header(req, "content-type") |> result.unwrap("")
+  case media_type(content_type) {
+    "application/x-www-form-urlencoded" -> {
+      use text <- text(req)
+      case uri.parse_query(text) {
+        Ok(values) -> next(Form(values:, files: []))
+        Error(Nil) -> reply.bad_request("invalid form")
+      }
+    }
+    "multipart/form-data" ->
+      case multipart.boundary(content_type) {
+        Ok(boundary) -> multipart_form(req, boundary, next)
+        Error(Nil) -> reply.bad_request("missing multipart boundary")
+      }
+    _ -> reply.error(415, "expected a form")
+  }
+}
+
+type FormState {
+  FormState(
+    parser: multipart.Parser,
+    size: Int,
+    /// The part being read and its content so far, newest first.
+    current: Option(#(multipart.Part, List(BitArray))),
+    values: List(#(String, String)),
+    files: List(#(String, UploadedFile)),
+  )
+}
+
+type FormError {
+  FormTooLarge
+  Unparsable(multipart.ParseError)
+  NotText(field: String)
+}
+
+fn multipart_form(
+  req: Request,
+  boundary: String,
+  next: fn(Form) -> Response,
+) -> Response {
+  let limit = req.body.limit
+  let init =
+    FormState(
+      parser: multipart.new(boundary),
+      size: 0,
+      current: None,
+      values: [],
+      files: [],
+    )
+  use result <- fold(req, init, fn(state, chunk) {
+    let size = state.size + bit_array.byte_size(chunk)
+    use <- bool.guard(size > limit, Error(FormTooLarge))
+    use #(parser, events) <- result.try(
+      multipart.feed(state.parser, chunk) |> result.map_error(Unparsable),
+    )
+    list.try_fold(events, FormState(..state, parser:, size:), collect)
+  })
+  case result {
+    Ok(state) ->
+      case multipart.finish(state.parser) {
+        Ok(Nil) ->
+          next(Form(
+            values: list.reverse(state.values),
+            files: list.reverse(state.files),
+          ))
+        Error(error) -> form_error(Unparsable(error))
+      }
+    Error(Stopped(error)) -> form_error(error)
+    Error(Failed(error)) -> error_response(error)
+  }
+}
+
+fn collect(
+  state: FormState,
+  event: multipart.Event,
+) -> Result(FormState, FormError) {
+  case event, state.current {
+    multipart.Start(part), _ ->
+      Ok(FormState(..state, current: Some(#(part, []))))
+    multipart.Data(data), Some(#(part, pieces)) ->
+      Ok(FormState(..state, current: Some(#(part, [data, ..pieces]))))
+    multipart.End, Some(#(part, pieces)) -> {
+      let data = bit_array.concat(list.reverse(pieces))
+      let state = FormState(..state, current: None)
+      case part.filename {
+        Some(filename) -> {
+          let file =
+            UploadedFile(filename:, content_type: part.content_type, data:)
+          Ok(FormState(..state, files: [#(part.name, file), ..state.files]))
+        }
+        None ->
+          case bit_array.to_string(data) {
+            Ok(text) ->
+              Ok(
+                FormState(..state, values: [#(part.name, text), ..state.values]),
+              )
+            Error(Nil) -> Error(NotText(part.name))
+          }
+      }
+    }
+    _, None -> Ok(state)
+  }
+}
+
+fn form_error(error: FormError) -> Response {
+  case error {
+    FormTooLarge -> reply.error(413, "content too large")
+    Unparsable(multipart.Malformed(reason)) -> reply.bad_request(reason)
+    Unparsable(multipart.TooManyParts(limit)) ->
+      reply.error(413, "more than " <> int.to_string(limit) <> " form fields")
+    NotText(field) -> reply.bad_request(field <> " is not valid UTF-8")
+  }
+}
+
+fn media_type(content_type: String) -> String {
+  case string.split(content_type, ";") {
+    [media, ..] -> string.lowercase(string.trim(media))
+    [] -> ""
+  }
 }
 
 /// The response for a body that couldn't be read: `413` when too large,

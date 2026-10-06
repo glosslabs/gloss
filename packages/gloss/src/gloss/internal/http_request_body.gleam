@@ -14,8 +14,13 @@ pub type RequestBody {
     /// Each piece of the body in turn. The callback returns `False` to stop
     /// early. `Ok` with the total byte count once the body is done.
     stream: fn(fn(BitArray) -> Bool) -> Result(Int, BodyError),
+    /// The server's `max_body`, for readers that buffer while streaming.
+    limit: Int,
   )
 }
+
+/// The server's default `max_body`, used for bodies built in tests.
+pub const default_limit = 1_048_576
 
 pub type BodyError {
   /// Larger than `limit` bytes.
@@ -34,16 +39,20 @@ pub type BodyError {
 
 /// A body that is already in memory: for tests, and empty bodies.
 pub fn from_bits(bits: BitArray) -> RequestBody {
-  RequestBody(read: fn() { Ok(bits) }, stream: fn(consume) {
-    case bit_array.byte_size(bits) {
-      0 -> Ok(0)
-      size ->
-        case consume(bits) {
-          True -> Ok(size)
-          False -> Error(Stopped)
-        }
-    }
-  })
+  RequestBody(
+    read: fn() { Ok(bits) },
+    stream: fn(consume) {
+      case bit_array.byte_size(bits) {
+        0 -> Ok(0)
+        size ->
+          case consume(bits) {
+            True -> Ok(size)
+            False -> Error(Stopped)
+          }
+      }
+    },
+    limit: default_limit,
+  )
 }
 
 /// How a network body was used. Kept in the process dictionary.
