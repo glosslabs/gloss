@@ -13,6 +13,7 @@ packages.
 | `gloss/meta` | Key/value metadata shared by the tracer and logger |
 | `gloss/scheduler` | Interval and cron tasks |
 | `gloss/signal` | SIGTERM/SIGHUP delivery for graceful shutdown |
+| `gloss/password` | Password hashing (salted PBKDF2-SHA256) and constant-time verification |
 
 ## HTTP
 
