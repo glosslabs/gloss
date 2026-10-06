@@ -4,6 +4,7 @@
 import gleam/bytes_tree.{type BytesTree}
 import gleam/http/response.{type Response}
 import gleam/json
+import gleam/list
 import gleam/string
 import gloss/http/reply.{type ErrorPage, ErrorPage}
 import gloss/internal/http_reply_negotiate as reply_negotiate
@@ -23,6 +24,8 @@ pub type Wire {
   Sized(BytesTree)
   SendFile(path: String, offset: Int, length: Int)
   Stream(producer: fn(fn(BytesTree) -> Result(Nil, Nil)) -> Nil)
+  /// Bytes and file parts, in order.
+  SendSegments(List(reply.Segment))
   /// Hand the socket over after the `101` head.
   Upgraded(run: fn(tcp.Socket) -> Nil)
 }
@@ -32,6 +35,15 @@ pub fn length(wire: Wire) -> Result(Int, Nil) {
   case wire {
     Sized(tree) -> Ok(bytes_tree.byte_size(tree))
     SendFile(length:, ..) -> Ok(length)
+    SendSegments(segments) ->
+      Ok(
+        list.fold(segments, 0, fn(total, segment) {
+          case segment {
+            reply.Data(tree) -> total + bytes_tree.byte_size(tree)
+            reply.FileRange(length:, ..) -> total + length
+          }
+        }),
+      )
     Stream(_) | Upgraded(_) -> Error(Nil)
   }
 }
@@ -46,6 +58,7 @@ pub fn render(
       response.set_body(res, SendFile(path:, offset:, length:))
     reply.Stream(producer) -> response.set_body(res, Stream(producer))
     reply.Upgrade(run) -> response.set_body(res, Upgraded(run))
+    reply.Segments(segments) -> response.set_body(res, SendSegments(segments))
     reply.Json(body) ->
       bytes(res, json.to_string_tree(body) |> bytes_tree.from_string_tree)
     reply.Text(body) -> bytes(res, bytes_tree.from_string(body))

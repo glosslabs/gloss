@@ -73,7 +73,7 @@ pub fn show(_req: Request, ctx: Context(App)) -> Response {
 | `gloss/http/session` | Server-side sessions: `load`, `get`/`set`/`remove`, `save`, `regenerate`, `destroy`, over a pluggable `Store` |
 | `gloss/http/session/memory` | The default store: an ETS table swept of expired sessions every minute |
 | `gloss/http/csrf` | Cross-site request forgery protection from `Sec-Fetch-Site` and `Origin`, with no tokens |
-| `gloss/http/static` | Files from a directory via `sendfile`, with content types, ETag revalidation, byte ranges for media, and `cache-control` |
+| `gloss/http/static` | Files from a directory via `sendfile`, with content types, ETag revalidation, byte ranges (including multipart) for media, and `cache-control` |
 | `gloss/http/sse` | Server-sent events over a streamed response |
 | `gloss/http/websocket` | WebSocket upgrades: `on_init`/`on_message`/`on_close`, `send_text`/`send_binary`, messages from other processes |
 | `gloss/http/traceparent` | W3C Trace Context: continue or start a trace per request (`ctx.trace`), and propagate it to downstream calls |

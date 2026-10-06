@@ -1,7 +1,9 @@
+import gleam/bit_array
 import gleam/http
 import gleam/http/request
 import gleam/int
 import gleam/list
+import gleam/string
 import gleeunit/should
 import gloss/http/router
 import gloss/http/server
@@ -101,7 +103,18 @@ pub fn parse_range_test() {
   static.parse_range("bytes=50-500", size) |> should.equal(static.Part(50, 99))
   static.parse_range("bytes=100-", size) |> should.equal(static.Unsatisfiable)
   static.parse_range("bytes=-0", size) |> should.equal(static.Unsatisfiable)
-  static.parse_range("bytes=0-1, 5-6", size) |> should.equal(static.Whole)
+  static.parse_range("bytes=0-1, 5-6", size)
+  |> should.equal(static.Parts([#(0, 1), #(5, 6)]))
+  // Out-of-file ranges are dropped; one left is a plain part.
+  static.parse_range("bytes=0-1, 500-600", size)
+  |> should.equal(static.Part(0, 1))
+  static.parse_range("bytes=200-300, 500-", size)
+  |> should.equal(static.Unsatisfiable)
+  // Overlapping, too many, or any malformed: the whole file.
+  static.parse_range("bytes=0-10, 5-20", size) |> should.equal(static.Whole)
+  static.parse_range("bytes=" <> string.join(list.repeat("0-0", 17), ","), size)
+  |> should.equal(static.Whole)
+  static.parse_range("bytes=0-1, x-2", size) |> should.equal(static.Whole)
   static.parse_range("bytes=9-0", size) |> should.equal(static.Whole)
   static.parse_range("items=0-1", size) |> should.equal(static.Whole)
   static.parse_range("bytes=0-", 0) |> should.equal(static.Unsatisfiable)
@@ -129,7 +142,27 @@ pub fn range_requests_test() {
   res.status |> should.equal(416)
   header(res, "content-range") |> should.equal("bytes */9")
 
-  ranged(dir, "bytes=0-1,3-4").status |> should.equal(200)
+  ranged(dir, "bytes=0-1,0-4").status |> should.equal(200)
+}
+
+pub fn multiple_ranges_are_multipart_test() {
+  let dir = site()
+  let res = ranged(dir, "bytes=0-2, 8-8")
+  res.status |> should.equal(206)
+  let assert "multipart/byteranges; boundary=" <> boundary =
+    header(res, "content-type")
+  rendered_body(res)
+  |> should.equal(
+    "--"
+    <> boundary
+    <> "\r\ncontent-type: text/javascript; charset=utf-8\r\ncontent-range: bytes 0-2/9\r\n\r\nlet\r\n"
+    <> "--"
+    <> boundary
+    <> "\r\ncontent-type: text/javascript; charset=utf-8\r\ncontent-range: bytes 8-8/9\r\n\r\n1\r\n"
+    <> "--"
+    <> boundary
+    <> "--\r\n",
+  )
 }
 
 pub fn if_range_test() {
@@ -171,6 +204,13 @@ pub fn sendfile_over_a_socket_test() {
   send(socket, "GET /assets/app.css HTTP/1.1\r\n\r\n")
   let assert Ok(#(_, _, body)) = read_response(socket, 1000)
   body |> should.equal(<<"body{}">>)
+  // Several ranges arrive as one multipart body, file parts via sendfile.
+  send(socket, "GET /assets/js/app.js HTTP/1.1\r\nrange: bytes=0-2,8-8\r\n\r\n")
+  let assert Ok(#(206, headers, body)) = read_response(socket, 1000)
+  let assert Ok("multipart/byteranges; boundary=" <> boundary) =
+    list.key_find(headers, "content-type")
+  string.contains(bit_array_to_string(body), "\r\n\r\nlet\r\n--" <> boundary)
+  |> should.be_true
   // A range is sent from the right offset.
   send(socket, "GET /assets/js/app.js HTTP/1.1\r\nrange: bytes=4-\r\n\r\n")
   let assert Ok(#(status, _, body)) = read_response(socket, 1000)
@@ -208,4 +248,9 @@ type UniqueOption {
 
 fn unique() -> Int {
   unique_integer([Positive])
+}
+
+fn bit_array_to_string(bits: BitArray) -> String {
+  let assert Ok(text) = bit_array.to_string(bits)
+  text
 }

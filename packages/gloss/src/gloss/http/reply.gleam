@@ -57,9 +57,17 @@ pub type Body {
   File(path: String, offset: Int, length: Int)
   /// A body written while it is produced; see `stream`.
   Stream(producer: fn(Emit) -> Nil)
+  /// A body assembled from in-memory bytes and parts of files, sent in
+  /// order; file parts are sent like `File`. See `gloss/http/static`.
+  Segments(List(Segment))
   /// Take over the connection after a `101 Switching Protocols` response.
   /// See `gloss/http/websocket`.
   Upgrade(run: fn(tcp.Socket) -> Nil)
+}
+
+pub type Segment {
+  Data(BytesTree)
+  FileRange(path: String, offset: Int, length: Int)
 }
 
 /// Sends one piece of a streamed body. `Error(Nil)` means stop: the client

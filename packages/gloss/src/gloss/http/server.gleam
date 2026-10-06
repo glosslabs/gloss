@@ -437,6 +437,15 @@ fn materialise(wire: Wire) -> BytesTree {
         Error(Nil) -> bytes_tree.new()
       }
     reply_render.Upgraded(_) -> bytes_tree.new()
+    reply_render.SendSegments(segments) ->
+      list.fold(segments, bytes_tree.new(), fn(tree, segment) {
+        case segment {
+          reply.Data(data) -> bytes_tree.append_tree(tree, data)
+          reply.FileRange(path:, offset:, length:) ->
+            materialise(reply_render.SendFile(path:, offset:, length:))
+            |> bytes_tree.append_tree(tree, _)
+        }
+      })
     reply_render.Stream(producer) -> {
       let chunks = process.new_subject()
       producer(fn(chunk) { Ok(process.send(chunks, chunk)) })

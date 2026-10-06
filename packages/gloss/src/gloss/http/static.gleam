@@ -16,10 +16,11 @@
 //// `cache-control` (`no-cache` by default, so clients revalidate every use
 //// and get a `304 Not Modified` while the file is unchanged).
 ////
-//// Large media can be fetched in parts: a `range` header asking for one
-//// byte range is answered `206 Partial Content` (or `416` when it lies
-//// outside the file), so video and audio players can seek and downloads
-//// can resume. `if-range` is respected. For fingerprinted
+//// Large media can be fetched in parts: a `range` header is answered
+//// `206 Partial Content` (or `416` when it lies outside the file), so video
+//// and audio players can seek and downloads can resume. Several ranges are
+//// sent as `multipart/byteranges`; more than 16, or overlapping ones, get
+//// the whole file. `if-range` is respected. For fingerprinted
 //// assets (`app.3f9a1c.css`) use a long cache instead:
 ////
 //// ```gleam
@@ -28,10 +29,14 @@
 //// |> static.handler
 //// ```
 
+import gleam/bit_array
+import gleam/bytes_tree
 import gleam/http/request
 import gleam/http/response
 import gleam/int
 import gleam/list
+import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 import gloss/http/context.{type Context, type Handler}
 import gloss/http/reply.{type Request, type Response}
@@ -62,7 +67,7 @@ pub fn files(directory: String) -> Handler(state) {
 
 pub fn handler(config: Config) -> Handler(state) {
   fn(req: Request, ctx: Context(state)) {
-    case context.param(ctx, config.param) |> result_then(safe_path) {
+    case context.param(ctx, config.param) |> result.try(safe_path) {
       Error(Nil) -> reply.not_found()
       Ok(relative) -> serve(req, config, config.directory <> "/" <> relative)
     }
@@ -100,6 +105,7 @@ fn serve(req: Request, config: Config, path: String) -> Response {
               <> "/"
               <> int.to_string(size),
           )
+        False, Parts(ranges) -> multipart(path, size, ranges)
         False, Unsatisfiable ->
           reply.error(416, "range not satisfiable")
           |> response.set_header(
@@ -138,8 +144,14 @@ pub type Range {
   Whole
   /// Bytes `first` to `last`, inclusive.
   Part(first: Int, last: Int)
+  /// Several ranges, in the order asked for, as `#(first, last)`.
+  Parts(List(#(Int, Int)))
   Unsatisfiable
 }
+
+/// More ranges than this, or overlapping ones, get the whole file: they
+/// only make a response bigger than the file itself.
+const max_ranges = 16
 
 /// What part of the file to send. A `range` is honoured only when an
 /// `if-range` header, if any, still names this version of the file.
@@ -159,43 +171,119 @@ fn wanted_range(
   }
 }
 
-/// A `range` header against a file of `size` bytes. Only single byte
-/// ranges are served; anything else, including several ranges, gets the
-/// whole file.
+/// A `range` header against a file of `size` bytes. A malformed header is
+/// ignored (the whole file), ranges outside the file are dropped, and
+/// `Unsatisfiable` means none were left.
 pub fn parse_range(header: String, size: Int) -> Range {
   case string.trim(header) {
-    "bytes=" <> spec ->
-      case string.split(spec, ","), size {
-        [_, _, ..], _ -> Whole
-        _, 0 -> Unsatisfiable
-        [one], _ ->
-          case string.split_once(string.trim(one), "-") {
-            // The last `n` bytes.
-            Ok(#("", n)) ->
-              case int.parse(n) {
-                Ok(n) if n > 0 -> Part(int.max(size - n, 0), size - 1)
-                Ok(_) -> Unsatisfiable
-                Error(Nil) -> Whole
+    "bytes=" <> spec -> {
+      let specs = string.split(spec, ",")
+      let parsed = list.map(specs, parse_spec(_, size))
+      case list.length(specs) > max_ranges, list.all(parsed, result.is_ok) {
+        True, _ | _, False -> Whole
+        False, True -> {
+          let ranges =
+            list.filter_map(parsed, fn(parsed) {
+              case parsed {
+                Ok(Some(range)) -> Ok(range)
+                _ -> Error(Nil)
               }
-            Ok(#(first, last)) ->
-              case int.parse(first), last {
-                Ok(first), _ if first >= size -> Unsatisfiable
-                Ok(first), "" -> Part(first, size - 1)
-                Ok(first), last ->
-                  case int.parse(last) {
-                    Ok(last) if last >= first ->
-                      Part(first, int.min(last, size - 1))
-                    _ -> Whole
-                  }
-                Error(Nil), _ -> Whole
+            })
+          case ranges {
+            [] -> Unsatisfiable
+            [#(first, last)] -> Part(first, last)
+            ranges ->
+              case overlapping(ranges) {
+                True -> Whole
+                False -> Parts(ranges)
               }
-            Error(Nil) -> Whole
           }
-        [], _ -> Whole
+        }
       }
+    }
     _ -> Whole
   }
 }
+
+/// One `first-last`, `first-` or `-suffix`: `Error` when malformed, `None`
+/// when it lies outside the file.
+fn parse_spec(spec: String, size: Int) -> Result(Option(#(Int, Int)), Nil) {
+  case string.split_once(string.trim(spec), "-") {
+    Ok(#("", n)) ->
+      case int.parse(n) {
+        Ok(n) if n > 0 && size > 0 -> Ok(Some(#(int.max(size - n, 0), size - 1)))
+        Ok(_) -> Ok(None)
+        Error(Nil) -> Error(Nil)
+      }
+    Ok(#(first, last)) ->
+      case int.parse(first), last {
+        Ok(first), _ if first < 0 -> Error(Nil)
+        Ok(first), "" if first >= size -> Ok(None)
+        Ok(first), "" -> Ok(Some(#(first, size - 1)))
+        Ok(first), last ->
+          case int.parse(last) {
+            Ok(last) if last < first -> Error(Nil)
+            Ok(_) if first >= size -> Ok(None)
+            Ok(last) -> Ok(Some(#(first, int.min(last, size - 1))))
+            Error(Nil) -> Error(Nil)
+          }
+        Error(Nil), _ -> Error(Nil)
+      }
+    Error(Nil) -> Error(Nil)
+  }
+}
+
+fn overlapping(ranges: List(#(Int, Int))) -> Bool {
+  let sorted = list.sort(ranges, fn(a, b) { int.compare(a.0, b.0) })
+  list.window_by_2(sorted) |> list.any(fn(pair) { pair.1.0 <= pair.0.1 })
+}
+
+/// A `206` whose body is each range as its own part, with its own
+/// `content-range`.
+fn multipart(path: String, size: Int, ranges: List(#(Int, Int))) -> Response {
+  let boundary = random_boundary()
+  let size_text = int.to_string(size)
+  let segments =
+    list.flat_map(ranges, fn(range) {
+      let #(first, last) = range
+      [
+        reply.Data(bytes_tree.from_string(
+          "--"
+          <> boundary
+          <> "\r\ncontent-type: "
+          <> content_type(path)
+          <> "\r\ncontent-range: bytes "
+          <> int.to_string(first)
+          <> "-"
+          <> int.to_string(last)
+          <> "/"
+          <> size_text
+          <> "\r\n\r\n",
+        )),
+        reply.FileRange(path:, offset: first, length: last - first + 1),
+        reply.Data(bytes_tree.from_string("\r\n")),
+      ]
+    })
+  response.new(206)
+  |> response.set_body(
+    reply.Segments(
+      list.append(segments, [
+        reply.Data(bytes_tree.from_string("--" <> boundary <> "--\r\n")),
+      ]),
+    ),
+  )
+  |> response.set_header(
+    "content-type",
+    "multipart/byteranges; boundary=" <> boundary,
+  )
+}
+
+fn random_boundary() -> String {
+  strong_rand_bytes(12) |> bit_array.base16_encode |> string.lowercase
+}
+
+@external(erlang, "crypto", "strong_rand_bytes")
+fn strong_rand_bytes(n: Int) -> BitArray
 
 /// The wildcard's value as a relative path, or `Error` if it could leave
 /// the directory or names a dotfile.
@@ -210,16 +298,6 @@ fn safe_path(path: String) -> Result(String, Nil) {
   case segments, unsafe {
     [], _ | _, True -> Error(Nil)
     _, False -> Ok(string.join(segments, "/"))
-  }
-}
-
-fn result_then(
-  result: Result(a, Nil),
-  next: fn(a) -> Result(b, Nil),
-) -> Result(b, Nil) {
-  case result {
-    Ok(value) -> next(value)
-    Error(Nil) -> Error(Nil)
   }
 }
 

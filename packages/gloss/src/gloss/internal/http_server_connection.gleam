@@ -15,7 +15,7 @@ import gleam/list
 import gleam/result
 import gloss/http/reply.{type Request}
 import gloss/internal/http_reply_render.{
-  type Wire, SendFile, Sized, Stream, Upgraded,
+  type Wire, SendFile, SendSegments, Sized, Stream, Upgraded,
 }
 import gloss/internal/http_request_body.{
   type BodyError, type RequestBody, RequestBody,
@@ -350,6 +350,18 @@ fn write(
         result, _ -> result
       }
     }
+    SendSegments(segments) -> {
+      let length = case http_reply_render.length(response.body) {
+        Ok(length) -> length
+        Error(Nil) -> 0
+      }
+      let framing = http1.ContentLength(length)
+      let head = http1.head(response, framing:, keep_alive:, date:)
+      case tcp.send(socket, head), head_request {
+        Ok(Nil), False -> send_segments(socket, segments)
+        result, _ -> result
+      }
+    }
     Upgraded(run) -> {
       let head =
         http1.head(response, framing: http1.Switching, keep_alive:, date:)
@@ -370,6 +382,26 @@ fn write(
       case tcp.send(socket, head), head_request {
         Ok(Nil), False -> stream(socket, producer, framing)
         result, _ -> result
+      }
+    }
+  }
+}
+
+fn send_segments(
+  socket: Socket,
+  segments: List(reply.Segment),
+) -> Result(Nil, Nil) {
+  case segments {
+    [] -> Ok(Nil)
+    [segment, ..rest] -> {
+      let sent = case segment {
+        reply.Data(tree) -> tcp.send(socket, tree)
+        reply.FileRange(path:, offset:, length:) ->
+          tcp.sendfile(socket, path, offset, length)
+      }
+      case sent {
+        Ok(Nil) -> send_segments(socket, rest)
+        Error(Nil) -> Error(Nil)
       }
     }
   }
