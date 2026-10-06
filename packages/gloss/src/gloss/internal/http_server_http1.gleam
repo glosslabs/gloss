@@ -48,6 +48,9 @@ pub type ResponseFraming {
   ChunkedResponse
   /// HTTP/1.0 streams: no framing header, and the connection closes after.
   UntilClose
+  /// `101 Switching Protocols`: no body, and the response's own
+  /// `connection` header is kept.
+  Switching
 }
 
 pub fn method(name: String) -> Method {
@@ -198,31 +201,25 @@ pub fn head(
   keep_alive keep_alive: Bool,
   date date: String,
 ) -> BytesTree {
+  let replaced = case framing {
+    Switching -> ["content-length", "transfer-encoding", "date"]
+    _ -> ["content-length", "transfer-encoding", "date", "connection"]
+  }
   let headers =
     response.headers
-    |> list.filter(fn(header) {
-      !list.contains(
-        ["content-length", "transfer-encoding", "date", "connection"],
-        header.0,
-      )
-    })
+    |> list.filter(fn(header) { !list.contains(replaced, header.0) })
   let framing_headers = case framing {
     ContentLength(length) -> [#("content-length", int.to_string(length))]
     ChunkedResponse -> [#("transfer-encoding", "chunked")]
-    UntilClose -> []
+    UntilClose | Switching -> []
+  }
+  let connection = case framing, keep_alive {
+    Switching, _ -> []
+    _, True -> [#("connection", "keep-alive")]
+    _, False -> [#("connection", "close")]
   }
   let headers =
-    list.flatten([
-      framing_headers,
-      [
-        #("date", date),
-        #("connection", case keep_alive {
-          True -> "keep-alive"
-          False -> "close"
-        }),
-      ],
-      headers,
-    ])
+    list.flatten([framing_headers, [#("date", date)], connection, headers])
   list.fold(
     headers,
     bytes_tree.from_string(status_line(response.status)),

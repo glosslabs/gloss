@@ -438,6 +438,7 @@ fn materialise(wire: Wire) -> BytesTree {
         Ok(data) -> bytes_tree.from_bit_array(data)
         Error(Nil) -> bytes_tree.new()
       }
+    reply_render.Upgraded(_) -> bytes_tree.new()
     reply_render.Stream(producer) -> {
       let chunks = process.new_subject()
       producer(fn(chunk) { Ok(process.send(chunks, chunk)) })

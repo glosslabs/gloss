@@ -13,7 +13,9 @@ import gleam/http/response.{type Response}
 import gleam/list
 import gleam/result
 import gloss/http/reply.{type Request}
-import gloss/internal/http_reply_render.{type Wire, SendFile, Sized, Stream}
+import gloss/internal/http_reply_render.{
+  type Wire, SendFile, Sized, Stream, Upgraded,
+}
 import gloss/internal/http_server_http1.{type Head, Head} as http1
 import gloss/internal/http_server_tcp.{type Socket} as tcp
 
@@ -242,6 +244,16 @@ fn write(
         Ok(Nil), False -> tcp.sendfile(socket, path, offset, length)
         result, _ -> result
       }
+    }
+    Upgraded(run) -> {
+      let head =
+        http1.head(response, framing: http1.Switching, keep_alive:, date:)
+      case tcp.send(socket, head) {
+        Ok(Nil) -> run(socket)
+        Error(Nil) -> Nil
+      }
+      // The socket is done once the upgraded protocol returns.
+      Error(Nil)
     }
     Stream(producer) -> {
       // HTTP/1.0 has no chunked encoding: send the body bare and close.

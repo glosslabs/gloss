@@ -2,6 +2,7 @@
 
 -export([listen/3, port/1, accept/1, controlling_process/2, close/1, send/2,
          sendfile/4, read_range/3, file_info/1, priv_dir/1, read_line/2,
+         sha1/1, unmask/2, arm_raw/1, is_drain/1,
          next/2, read_body/3, drain_requested/0, request_drain/1, await_go/0,
          go/1, rescue/1, random_id/0, http_date/0]).
 
@@ -137,6 +138,31 @@ target({absoluteURI, _Scheme, _Host, _Port, Path}) -> Path;
 target('*') -> <<"*">>;
 target({scheme, _, Rest}) -> to_binary(Rest);
 target(Other) -> to_binary(Other).
+
+%% --- WebSockets -------------------------------------------------------------
+
+sha1(Data) -> crypto:hash(sha, Data).
+
+%% Switch an upgraded socket to raw packets and deliver the next data as a
+%% {tcp, Socket, Data} message.
+arm_raw(Socket) ->
+    _ = inet:setopts(Socket, [{packet, raw}, {active, once}]),
+    nil.
+
+%% Whether a message is the server's drain request, remembering it like
+%% drain_requested/0 does.
+is_drain(gloss_http_drain) ->
+    put(gloss_http_draining, true),
+    true;
+is_drain(_) ->
+    false.
+
+%% XOR the payload with the 4-byte key repeated to its length.
+unmask(_Key, <<>>) -> <<>>;
+unmask(Key, Payload) ->
+    Size = byte_size(Payload),
+    Repeated = binary:part(binary:copy(Key, (Size + 3) div 4), 0, Size),
+    crypto:exor(Payload, Repeated).
 
 %% --- Process coordination ---------------------------------------------------
 

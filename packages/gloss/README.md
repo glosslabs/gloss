@@ -75,6 +75,7 @@ pub fn show(_req: Request, ctx: Context(App)) -> Response {
 | `gloss/http/csrf` | Cross-site request forgery protection from `Sec-Fetch-Site` and `Origin`, with no tokens |
 | `gloss/http/static` | Files from a directory via `sendfile`, with content types, ETag revalidation and `cache-control` |
 | `gloss/http/sse` | Server-sent events over a streamed response |
+| `gloss/http/websocket` | WebSocket upgrades: `on_init`/`on_message`/`on_close`, `send_text`/`send_binary`, messages from other processes |
 
 ### Errors follow the `Accept` header
 
@@ -132,4 +133,4 @@ caught by the BEAM and stops the node immediately.
 HTTP/1.1 only, without TLS: run behind a proxy that terminates it. Request
 bodies may be sent with `Content-Length` or chunked, and are read in full
 up to `max_body`. Responses can be streamed with `reply.stream` (chunked
-for HTTP/1.1). There is no WebSocket support yet.
+for HTTP/1.1), and upgraded to WebSockets with `gloss/http/websocket`.

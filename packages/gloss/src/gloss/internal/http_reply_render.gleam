@@ -7,6 +7,7 @@ import gleam/json
 import gleam/string
 import gloss/http/reply.{type ErrorPage, ErrorPage}
 import gloss/internal/http_reply_negotiate as reply_negotiate
+import gloss/internal/http_server_tcp as tcp
 import gloss/internal/http_status as status
 
 /// Error formats, in the order preferred when the client has no preference.
@@ -22,6 +23,8 @@ pub type Wire {
   Sized(BytesTree)
   SendFile(path: String, offset: Int, length: Int)
   Stream(producer: fn(fn(BytesTree) -> Result(Nil, Nil)) -> Nil)
+  /// Hand the socket over after the `101` head.
+  Upgraded(run: fn(tcp.Socket) -> Nil)
 }
 
 /// The body's size, when it is known before sending.
@@ -29,7 +32,7 @@ pub fn length(wire: Wire) -> Result(Int, Nil) {
   case wire {
     Sized(tree) -> Ok(bytes_tree.byte_size(tree))
     SendFile(length:, ..) -> Ok(length)
-    Stream(_) -> Error(Nil)
+    Stream(_) | Upgraded(_) -> Error(Nil)
   }
 }
 
@@ -42,6 +45,7 @@ pub fn render(
     reply.File(path:, offset:, length:) ->
       response.set_body(res, SendFile(path:, offset:, length:))
     reply.Stream(producer) -> response.set_body(res, Stream(producer))
+    reply.Upgrade(run) -> response.set_body(res, Upgraded(run))
     reply.Json(body) ->
       bytes(res, json.to_string_tree(body) |> bytes_tree.from_string_tree)
     reply.Text(body) -> bytes(res, bytes_tree.from_string(body))

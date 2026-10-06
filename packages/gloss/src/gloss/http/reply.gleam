@@ -30,6 +30,7 @@ import gleam/json.{type Json}
 import gleam/list
 import gleam/string
 import gloss/internal/http_reply_negotiate as reply_negotiate
+import gloss/internal/http_server_tcp as tcp
 
 /// A request whose body has been read in full.
 pub type Request =
@@ -51,6 +52,9 @@ pub type Body {
   File(path: String, offset: Int, length: Int)
   /// A body written while it is produced; see `stream`.
   Stream(producer: fn(Emit) -> Nil)
+  /// Take over the connection after a `101 Switching Protocols` response.
+  /// See `gloss/http/websocket`.
+  Upgrade(run: fn(tcp.Socket) -> Nil)
 }
 
 /// Sends one piece of a streamed body. `Error(Nil)` means stop: the client
