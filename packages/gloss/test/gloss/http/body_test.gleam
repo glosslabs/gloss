@@ -14,7 +14,7 @@ fn decoder() {
 fn post(content_type: String, payload: String) {
   request(http.Post, "/")
   |> request.set_header("content-type", content_type)
-  |> request.set_body(<<payload:utf8>>)
+  |> request.set_body(body.from_string(payload))
 }
 
 fn run(req) {

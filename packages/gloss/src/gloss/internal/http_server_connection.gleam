@@ -10,12 +10,16 @@ import gleam/bit_array
 import gleam/bytes_tree.{type BytesTree}
 import gleam/http
 import gleam/http/response.{type Response}
+import gleam/int
 import gleam/list
 import gleam/result
 import gloss/http/reply.{type Request}
 import gloss/internal/http_reply_render.{
   type Wire, SendFile, Sized, Stream, Upgraded,
 }
+import gloss/internal/http_request_body.{
+  type BodyError, type RequestBody, RequestBody,
+} as request_body
 import gloss/internal/http_server_http1.{type Head, Head} as http1
 import gloss/internal/http_server_tcp.{type Socket} as tcp
 
@@ -42,7 +46,6 @@ pub type Problem {
   Malformed(detail: String)
   HeaderTimeout
   TooManyHeaders
-  BodyTooLarge(length: Int)
   UnsupportedTransferEncoding
 }
 
@@ -125,77 +128,172 @@ fn read_body(
       reject(400, Malformed("invalid content-length"))
     Error(http1.ConflictingFraming) ->
       reject(400, Malformed("both transfer-encoding and content-length"))
-    Ok(http1.Length(length)) if length > settings.max_body ->
-      reject(413, BodyTooLarge(length))
     Ok(framing) -> {
-      let announced = case framing {
-        http1.Length(length) -> length
-        http1.Chunked -> 1
-      }
-      let continued = case announced > 0 && http1.expects_continue(head) {
-        True -> tcp.send(socket, bytes_tree.from_string(http1.continue))
-        False -> Ok(Nil)
-      }
-      let body = case continued, framing {
-        Error(Nil), _ -> Error(Closed)
-        Ok(Nil), http1.Length(length) ->
-          tcp.read_body(socket, length, settings.header_timeout)
-          |> result.replace_error(Closed)
-        Ok(Nil), http1.Chunked -> read_chunks(socket, settings, 0, [])
-      }
-      case body {
-        Ok(body) -> respond(socket, settings, head, body, draining)
-        Error(Closed) -> tcp.close(socket)
-        Error(Rejected(status, problem)) -> reject(status, problem)
-      }
+      request_body.reset()
+      let body = network_body(socket, settings, head, framing)
+      respond(socket, settings, head, body, framing, draining)
     }
   }
 }
 
-type BodyFailure {
-  /// The client went away or was too slow: close without answering.
-  Closed
-  Rejected(status: Int, problem: Problem)
+/// The request's body, read from the socket when the handler asks.
+fn network_body(
+  socket: Socket,
+  settings: Settings,
+  head: Head,
+  framing: http1.BodyFraming,
+) -> RequestBody {
+  // Tell a client waiting on `expect: 100-continue` to send the body, the
+  // first time the handler reads it.
+  let start = fn() {
+    case http1.expects_continue(head), framing {
+      True, http1.Chunked -> continue(socket)
+      True, http1.Length(length) if length > 0 -> continue(socket)
+      _, _ -> Nil
+    }
+  }
+  RequestBody(
+    read: fn() {
+      case request_body.status(), framing {
+        request_body.Buffered(bits), _ -> Ok(bits)
+        request_body.Streamed, _ | request_body.Broken, _ ->
+          Error(request_body.Consumed)
+        request_body.Unread, http1.Length(length)
+          if length > settings.max_body
+        -> {
+          request_body.set_status(request_body.Broken)
+          Error(request_body.TooLarge(settings.max_body))
+        }
+        request_body.Unread, _ -> {
+          start()
+          let read =
+            fold(socket, settings, framing, #([], 0), fn(acc, chunk) {
+              let size = acc.1 + bit_array.byte_size(chunk)
+              case size > settings.max_body {
+                True -> Error(request_body.TooLarge(settings.max_body))
+                False -> Ok(#([chunk, ..acc.0], size))
+              }
+            })
+          case read {
+            Ok(#(chunks, _)) -> {
+              let bits = bit_array.concat(list.reverse(chunks))
+              request_body.set_status(request_body.Buffered(bits))
+              Ok(bits)
+            }
+            Error(error) -> {
+              request_body.set_status(request_body.Broken)
+              Error(error)
+            }
+          }
+        }
+      }
+    },
+    stream: fn(consume) {
+      case request_body.status() {
+        request_body.Buffered(bits) ->
+          request_body.from_bits(bits).stream(consume)
+        request_body.Streamed | request_body.Broken ->
+          Error(request_body.Consumed)
+        request_body.Unread -> {
+          start()
+          let streamed =
+            fold(socket, settings, framing, 0, fn(total, chunk) {
+              case consume(chunk) {
+                True -> Ok(total + bit_array.byte_size(chunk))
+                False -> Error(request_body.Stopped)
+              }
+            })
+          request_body.set_status(case streamed {
+            Ok(_) -> request_body.Streamed
+            Error(_) -> request_body.Broken
+          })
+          streamed
+        }
+      }
+    },
+  )
+}
+
+fn continue(socket: Socket) -> Nil {
+  let _ = tcp.send(socket, bytes_tree.from_string(http1.continue))
+  Nil
+}
+
+/// The largest piece read from the socket at once.
+const piece = 65_536
+
+/// Read the body piece by piece, folding each piece into `acc`.
+fn fold(
+  socket: Socket,
+  settings: Settings,
+  framing: http1.BodyFraming,
+  acc: acc,
+  f: fn(acc, BitArray) -> Result(acc, BodyError),
+) -> Result(acc, BodyError) {
+  case framing {
+    http1.Length(length) -> read_exact(socket, settings, length, acc, f)
+    http1.Chunked -> read_chunks(socket, settings, acc, f)
+  }
+}
+
+/// Read exactly `remaining` bytes.
+fn read_exact(
+  socket: Socket,
+  settings: Settings,
+  remaining: Int,
+  acc: acc,
+  f: fn(acc, BitArray) -> Result(acc, BodyError),
+) -> Result(acc, BodyError) {
+  case remaining {
+    0 -> Ok(acc)
+    _ -> {
+      let size = int.min(remaining, piece)
+      case tcp.read_body(socket, size, settings.header_timeout) {
+        Error(Nil) -> Error(request_body.Incomplete)
+        Ok(data) -> {
+          use acc <- result.try(f(acc, data))
+          read_exact(socket, settings, remaining - size, acc, f)
+        }
+      }
+    }
+  }
 }
 
 /// Read a chunked body: chunk-size lines, chunk data, then trailers, which
-/// are ignored. `chunks` is newest first.
+/// are ignored.
 fn read_chunks(
   socket: Socket,
   settings: Settings,
-  total: Int,
-  chunks: List(BitArray),
-) -> Result(BitArray, BodyFailure) {
+  acc: acc,
+  f: fn(acc, BitArray) -> Result(acc, BodyError),
+) -> Result(acc, BodyError) {
   let timeout = settings.header_timeout
   use line <- result.try(
-    tcp.read_line(socket, timeout) |> result.replace_error(Closed),
+    tcp.read_line(socket, timeout)
+    |> result.replace_error(request_body.Incomplete),
   )
   case http1.chunk_size(line) {
-    Error(Nil) -> Error(Rejected(400, Malformed("invalid chunk size")))
+    Error(Nil) -> Error(request_body.Malformed("invalid chunk size"))
     Ok(0) -> {
       use Nil <- result.map(skip_trailers(socket, timeout))
-      bit_array.concat(list.reverse(chunks))
+      acc
     }
-    Ok(size) if total + size > settings.max_body ->
-      Error(Rejected(413, BodyTooLarge(total + size)))
     Ok(size) -> {
-      use data <- result.try(
-        tcp.read_body(socket, size, timeout) |> result.replace_error(Closed),
-      )
+      use acc <- result.try(read_exact(socket, settings, size, acc, f))
       case tcp.read_line(socket, timeout) {
-        Ok("") -> read_chunks(socket, settings, total + size, [data, ..chunks])
-        Ok(_) -> Error(Rejected(400, Malformed("chunk data too long")))
-        Error(Nil) -> Error(Closed)
+        Ok("") -> read_chunks(socket, settings, acc, f)
+        Ok(_) -> Error(request_body.Malformed("chunk data too long"))
+        Error(Nil) -> Error(request_body.Incomplete)
       }
     }
   }
 }
 
-fn skip_trailers(socket: Socket, timeout: Int) -> Result(Nil, BodyFailure) {
+fn skip_trailers(socket: Socket, timeout: Int) -> Result(Nil, BodyError) {
   case tcp.read_line(socket, timeout) {
     Ok("") -> Ok(Nil)
     Ok(_) -> skip_trailers(socket, timeout)
-    Error(Nil) -> Error(Closed)
+    Error(Nil) -> Error(request_body.Incomplete)
   }
 }
 
@@ -203,13 +301,20 @@ fn respond(
   socket: Socket,
   settings: Settings,
   head: Head,
-  body: BitArray,
+  body: RequestBody,
+  framing: http1.BodyFraming,
   draining: Bool,
 ) -> Nil {
   let response = settings.handler(http1.to_request(head, body))
   // A drain requested while the handler ran is still waiting in the mailbox.
   let draining = draining || tcp.drain_requested()
-  let keep_alive = !draining && http1.keep_alive(head)
+  // Unread or half-read body bytes would be taken for the next request.
+  let consumed = case request_body.status(), framing {
+    request_body.Buffered(_), _ | request_body.Streamed, _ -> True
+    request_body.Unread, http1.Length(0) -> True
+    _, _ -> False
+  }
+  let keep_alive = !draining && consumed && http1.keep_alive(head)
   let written =
     write(socket, response, keep_alive, head.method == http.Head, head.version)
   case written, keep_alive {
@@ -321,7 +426,6 @@ pub fn message(problem: Problem) -> String {
     Malformed(_) -> "malformed request"
     HeaderTimeout -> "request timeout"
     TooManyHeaders -> "too many headers"
-    BodyTooLarge(_) -> "content too large"
     UnsupportedTransferEncoding -> "transfer-encoding is not supported"
   }
 }

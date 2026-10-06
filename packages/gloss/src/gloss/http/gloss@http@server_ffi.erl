@@ -2,7 +2,7 @@
 
 -export([listen/3, port/1, accept/1, controlling_process/2, close/1, send/2,
          sendfile/4, read_range/3, file_info/1, priv_dir/1, read_line/2,
-         sha1/1, unmask/2, arm_raw/1, is_drain/1, http_date/1,
+         sha1/1, unmask/2, arm_raw/1, is_drain/1, http_date/1, pdict_get/1,
          next/2, read_body/3, drain_requested/0, request_drain/1, await_go/0,
          go/1, rescue/1, http_date/0]).
 
@@ -250,6 +250,12 @@ format_date({{Y, Mo, D} = Date, {H, Mi, S}}) ->
                          "Aug", "Sep", "Oct", "Nov", "Dec"}),
     iolist_to_binary(io_lib:format("~s, ~2..0w ~s ~4..0w ~2..0w:~2..0w:~2..0w GMT",
                                    [Day, D, Month, Y, H, Mi, S])).
+
+pdict_get(Key) ->
+    case get(Key) of
+        undefined -> {error, nil};
+        Value -> {ok, Value}
+    end.
 
 %% --- Helpers ----------------------------------------------------------------
 

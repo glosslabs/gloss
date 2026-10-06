@@ -4,6 +4,7 @@ import gleam/http
 import gleam/http/response
 import gleam/option.{None, Some}
 import gleeunit/should
+import gloss/http/body
 import gloss/internal/http_server_http1.{Head} as http1
 
 fn head(version: #(Int, Int), headers: List(#(String, String))) {
@@ -67,16 +68,20 @@ pub fn to_request_test() {
         version: #(1, 1),
         headers: [#("host", "example.com:8080")],
       ),
-      <<"hi">>,
+      body.from_bits(<<"hi">>),
     )
   req.method |> should.equal(http.Post)
   req.path |> should.equal("/notes")
   req.query |> should.equal(Some("page=2"))
   req.host |> should.equal("example.com")
   req.port |> should.equal(Some(8080))
-  req.body |> should.equal(<<"hi">>)
+  body.read(req) |> should.equal(Ok(<<"hi">>))
 
-  let req = http1.to_request(head(#(1, 1), [#("host", "example.com")]), <<>>)
+  let req =
+    http1.to_request(
+      head(#(1, 1), [#("host", "example.com")]),
+      body.from_bits(<<>>),
+    )
   req.query |> should.equal(None)
   req.port |> should.equal(None)
 }

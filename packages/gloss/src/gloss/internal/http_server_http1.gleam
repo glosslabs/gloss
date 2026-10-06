@@ -11,7 +11,7 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
-import gloss/http/reply.{type Request}
+import gloss/http/reply.{type Request, type RequestBody}
 import gloss/internal/http_status as status
 
 /// A request line and its headers, before the body is read.
@@ -139,7 +139,7 @@ pub fn keep_alive(head: Head) -> Bool {
 
 /// The request for a head and its body. The host and port come from the
 /// `Host` header; the scheme is always `http`.
-pub fn to_request(head: Head, body: BitArray) -> Request {
+pub fn to_request(head: Head, body: RequestBody) -> Request {
   let #(path, query) = case string.split_once(head.target, "?") {
     Ok(#(path, query)) -> #(path, Some(query))
     Error(Nil) -> #(head.target, None)

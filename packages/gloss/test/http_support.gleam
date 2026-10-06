@@ -7,6 +7,7 @@ import gleam/http/request
 import gleam/http/response
 import gleam/list
 import gleam/result
+import gloss/http/body
 import gloss/http/context.{type Context, type Handler, type Middleware, Context}
 import gloss/http/reply.{type Request, type Response}
 import gloss/http/traceparent
@@ -18,7 +19,7 @@ pub fn request(method: Method, path: String) -> Request {
   request.new()
   |> request.set_method(method)
   |> request.set_path(path)
-  |> request.set_body(<<>>)
+  |> request.set_body(body.from_bits(<<>>))
 }
 
 pub fn ctx(state: state) -> Context(state) {

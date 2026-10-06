@@ -45,7 +45,7 @@
 ////
 //// Request bodies may be sent with `Content-Length` or chunked; other
 //// transfer codings are answered `501`, and a request with both framings
-//// `400`. Responses are sent with `Content-Length`, except streams
+//// `400`. Bodies are read only when a handler asks (see `gloss/http/body`). Responses are sent with `Content-Length`, except streams
 //// (`reply.stream`), which are chunked. There is no TLS: run behind a proxy
 //// that terminates it.
 
@@ -192,8 +192,9 @@ pub fn with(
   Builder(..builder, middleware: list.append(builder.middleware, [middleware]))
 }
 
-/// The largest request body accepted, in bytes. Larger ones are answered
-/// `413`.
+/// The largest request body `body.bits`, `body.text` and `body.json` will
+/// read, in bytes; larger ones are answered `413`. Default 1 MiB.
+/// `body.stream` is not limited by it.
 pub fn max_body(builder: Builder(state), bytes: Int) -> Builder(state) {
   Builder(..builder, max_body: bytes)
 }
@@ -396,10 +397,6 @@ fn report_problem(tracer: Tracer, problem: connection.Problem) -> Nil {
   case problem {
     connection.Malformed(detail:) -> [
       #("detail", meta.String(detail)),
-      ..reason
-    ]
-    connection.BodyTooLarge(length:) -> [
-      #("length", meta.Int(length)),
       ..reason
     ]
     _ -> reason

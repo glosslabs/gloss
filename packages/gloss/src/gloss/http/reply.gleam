@@ -30,11 +30,16 @@ import gleam/json.{type Json}
 import gleam/list
 import gleam/string
 import gloss/internal/http_reply_negotiate as reply_negotiate
+import gloss/internal/http_request_body as request_body
 import gloss/internal/http_server_tcp as tcp
 
-/// A request whose body has been read in full.
+/// A request whose body is read on demand with `gloss/http/body`.
 pub type Request =
-  request.Request(BitArray)
+  request.Request(RequestBody)
+
+/// The body of a request, not yet read. See `gloss/http/body`.
+pub type RequestBody =
+  request_body.RequestBody
 
 pub type Response =
   response.Response(Body)

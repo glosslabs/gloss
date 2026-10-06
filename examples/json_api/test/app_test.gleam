@@ -11,6 +11,7 @@ import gleam/http/response.{type Response}
 import gleam/option.{None}
 import gleeunit
 import gleeunit/should
+import gloss/http/body
 import gloss/http/reply.{type Request}
 import gloss/http/router
 import gloss/http/server
@@ -46,7 +47,7 @@ fn req(method: http.Method, path: String) -> Request {
   request.new()
   |> request.set_method(method)
   |> request.set_path(path)
-  |> request.set_body(<<>>)
+  |> request.set_body(body.from_bits(<<>>))
 }
 
 fn authed(r: Request) -> Request {
@@ -56,10 +57,10 @@ fn authed(r: Request) -> Request {
 fn json_body(r: Request, payload: String) -> Request {
   r
   |> request.set_header("content-type", "application/json")
-  |> request.set_body(<<payload:utf8>>)
+  |> request.set_body(body.from_string(payload))
 }
 
-fn body(res: Response(BytesTree)) -> String {
+fn text_of(res: Response(BytesTree)) -> String {
   let assert Ok(text) =
     res.body |> bytes_tree.to_bit_array |> bit_array.to_string
   text
@@ -72,7 +73,7 @@ pub fn routes_are_valid_test() {
 pub fn health_test() {
   let res = call(req(http.Get, "/health"))
   res.status |> should.equal(200)
-  body(res) |> should.equal("{\"status\":\"ok\"}")
+  text_of(res) |> should.equal("{\"status\":\"ok\"}")
 }
 
 pub fn me_requires_a_token_test() {
@@ -83,7 +84,7 @@ pub fn me_requires_a_token_test() {
   |> should.equal(401)
   let res = call(req(http.Get, "/auth/me") |> authed)
   res.status |> should.equal(200)
-  body(res) |> should.equal("{\"name\":\"api\"}")
+  text_of(res) |> should.equal("{\"name\":\"api\"}")
 }
 
 pub fn notes_lifecycle_test() {
@@ -94,13 +95,14 @@ pub fn notes_lifecycle_test() {
       req(http.Post, "/notes") |> authed |> json_body("{\"title\":\"milk\"}"),
     )
   created.status |> should.equal(201)
-  body(created) |> should.equal("{\"id\":1,\"title\":\"milk\",\"body\":\"\"}")
+  text_of(created)
+  |> should.equal("{\"id\":1,\"title\":\"milk\",\"body\":\"\"}")
 
   let shown = send(req(http.Get, "/notes/1") |> authed)
   shown.status |> should.equal(200)
 
   let listed = send(req(http.Get, "/notes") |> authed)
-  body(listed)
+  text_of(listed)
   |> should.equal("{\"notes\":[{\"id\":1,\"title\":\"milk\",\"body\":\"\"}]}")
 
   send(req(http.Delete, "/notes/1") |> authed).status |> should.equal(204)
