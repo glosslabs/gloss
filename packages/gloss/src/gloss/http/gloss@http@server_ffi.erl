@@ -6,6 +6,8 @@
          gzip/1, gzip_open/0, gzip_chunk/2, gzip_finish/1,
          inflate_open/0, inflate/2, inflate_continue/1, inflate_end/1,
          peer_address/1, ip_bytes/1, find/2,
+         upload_open/1, upload_write/2, upload_close/1, upload_rename/2,
+         upload_delete/1,
          next/2, read_body/3, drain_requested/0, request_drain/1, await_go/0,
          go/1, rescue/1, http_date/0]).
 
@@ -350,3 +352,28 @@ find(Haystack, Needle) ->
         {Position, _} -> {ok, Position};
         nomatch -> {error, nil}
     end.
+
+%% --- Uploads ------------------------------------------------------------------
+
+upload_open(Path) ->
+    _ = filelib:ensure_dir(Path),
+    case file:open(Path, [write, raw, binary]) of
+        {ok, Device} -> {ok, Device};
+        {error, _} -> {error, nil}
+    end.
+
+upload_write(Device, Data) ->
+    case file:write(Device, Data) of
+        ok -> {ok, nil};
+        {error, _} -> {error, nil}
+    end.
+
+upload_close(Device) -> _ = file:close(Device), nil.
+
+upload_rename(From, To) ->
+    case file:rename(From, To) of
+        ok -> {ok, nil};
+        {error, _} -> {error, nil}
+    end.
+
+upload_delete(Path) -> _ = file:delete(Path), nil.
