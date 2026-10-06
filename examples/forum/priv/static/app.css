@@ -1,0 +1,16 @@
+body { font: 16px/1.5 system-ui, sans-serif; max-width: 42rem; margin: 0 auto; padding: 1rem; color: #222; }
+header nav { display: flex; gap: 1rem; align-items: center; border-bottom: 1px solid #ddd; padding-bottom: .5rem; }
+header nav .brand { font-weight: 700; margin-right: auto; }
+header nav form { margin: 0; }
+a { color: #2b559e; }
+label { display: block; margin: .75rem 0; }
+label span { display: block; font-size: .9rem; color: #555; }
+input:not([type=file]), textarea { width: 100%; box-sizing: border-box; font: inherit; padding: .4rem; }
+button { font: inherit; padding: .3rem .8rem; }
+.error { color: #b00020; }
+.threads, .posts { list-style: none; padding: 0; }
+.threads li, .posts li { padding: .6rem 0; border-bottom: 1px solid #eee; }
+.posts header { display: flex; gap: .5rem; align-items: center; }
+.body { white-space: pre-wrap; }
+.avatar { width: 2rem; height: 2rem; border-radius: 50%; object-fit: cover; display: inline-grid; place-items: center; background: #dde3ee; vertical-align: middle; margin-right: .4rem; }
+.pages { display: flex; justify-content: space-between; }

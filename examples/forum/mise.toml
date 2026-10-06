@@ -1,0 +1,21 @@
+# Tools (gleam, erlang) come from the repository's root mise.toml.
+
+[tasks.dev]
+description = "Run the server on :4000 (PORT, APP_ENV, DATA_DIR)"
+run = "gleam run"
+
+[tasks.test]
+description = "Run the tests"
+run = "gleam test"
+
+[tasks.format]
+description = "Format the source and tests"
+run = "gleam format src test"
+
+[tasks.check]
+description = "Check formatting, build with warnings as errors, and test, as CI does"
+run = [
+  "gleam format --check src test",
+  "gleam build --warnings-as-errors",
+  "gleam test",
+]

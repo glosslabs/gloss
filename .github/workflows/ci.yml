@@ -24,6 +24,7 @@ jobs:
             packages/gloss_sentry,
             template,
             examples/json_api,
+            examples/forum,
           ]
     defaults:
       run:
