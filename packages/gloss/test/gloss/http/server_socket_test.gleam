@@ -1,4 +1,6 @@
+import gleam/bytes_tree
 import gleam/erlang/process
+import gleam/int
 import gleam/list
 import gleam/otp/static_supervisor
 import gleam/time/duration
@@ -38,11 +40,35 @@ fn routes() {
     use text <- body.text(req)
     reply.text(200, text)
   })
+  |> router.get("/stream/:n", fn(_, ctx) {
+    use n <- context.int_param(ctx, "n")
+    reply.stream(200, "text/plain", fn(emit) {
+      list.repeat(Nil, n)
+      |> list.index_map(fn(_, i) { i })
+      |> list.each(fn(i) {
+        let _ = emit(bytes_tree.from_string(int.to_string(i) <> "\n"))
+        Nil
+      })
+    })
+  })
+  |> router.get("/forever", fn(_, _) {
+    reply.stream(200, "text/plain", fn(emit) { tick(emit) })
+  })
   |> router.get("/slow/:ms", fn(_, ctx) {
     use ms <- context.int_param(ctx, "ms")
     process.sleep(ms)
     reply.text(200, "slow")
   })
+}
+
+fn tick(emit: reply.Emit) -> Nil {
+  case emit(bytes_tree.from_string(".")) {
+    Ok(Nil) -> {
+      process.sleep(10)
+      tick(emit)
+    }
+    Error(Nil) -> Nil
+  }
 }
 
 fn builder() -> Builder(Nil) {
@@ -146,7 +172,38 @@ pub fn body_too_large_test() {
   let _ = server.shutdown(srv)
 }
 
-pub fn chunked_body_is_not_implemented_test() {
+pub fn chunked_body_is_read_test() {
+  let #(srv, port) = start(builder())
+  let assert Ok(socket) = connect(port)
+  send(
+    socket,
+    "POST /echo HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n"
+      <> "5\r\nhello\r\n6;ext=1\r\n world\r\n0\r\nx-trailer: 1\r\n\r\n",
+  )
+  let assert Ok(reply) = read_response(socket, 1000)
+  reply.0 |> should.equal(200)
+  reply.2 |> should.equal(<<"hello world">>)
+  // The connection is still usable afterwards.
+  send(socket, get("/hello"))
+  let assert Ok(reply) = read_response(socket, 1000)
+  reply.2 |> should.equal(<<"hello">>)
+  let _ = server.shutdown(srv)
+}
+
+pub fn chunked_body_too_large_test() {
+  let #(srv, port) = start(builder() |> server.max_body(8))
+  let assert Ok(socket) = connect(port)
+  send(
+    socket,
+    "POST /echo HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n"
+      <> "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n",
+  )
+  let assert Ok(reply) = read_response(socket, 1000)
+  reply.0 |> should.equal(413)
+  let _ = server.shutdown(srv)
+}
+
+pub fn unsupported_transfer_coding_test() {
   let events = process.new_subject()
   let #(srv, port) =
     start(
@@ -154,7 +211,7 @@ pub fn chunked_body_is_not_implemented_test() {
       |> server.tracer(tracer.new() |> tracer.handle(process.send(events, _))),
     )
   let assert Ok(socket) = connect(port)
-  send(socket, "POST /echo HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n")
+  send(socket, "POST /echo HTTP/1.1\r\ntransfer-encoding: gzip\r\n\r\n")
   let assert Ok(reply) = read_response(socket, 1000)
   reply.0 |> should.equal(501)
   let _ = server.shutdown(srv)
@@ -166,6 +223,57 @@ pub fn chunked_body_is_not_implemented_test() {
     }
   })
   |> should.be_true
+}
+
+pub fn conflicting_framing_is_rejected_test() {
+  let #(srv, port) = start(builder())
+  let assert Ok(socket) = connect(port)
+  send(
+    socket,
+    "POST /echo HTTP/1.1\r\ntransfer-encoding: chunked\r\ncontent-length: 5\r\n\r\n",
+  )
+  let assert Ok(reply) = read_response(socket, 1000)
+  reply.0 |> should.equal(400)
+  let _ = server.shutdown(srv)
+}
+
+pub fn streamed_response_is_chunked_test() {
+  let #(srv, port) = start(builder())
+  let assert Ok(socket) = connect(port)
+  send(socket, get("/stream/3"))
+  let assert Ok(reply) = read_response(socket, 1000)
+  reply.0 |> should.equal(200)
+  header(reply, "transfer-encoding") |> should.equal("chunked")
+  header(reply, "content-length") |> should.equal("")
+  reply.2 |> should.equal(<<"0\n1\n2\n">>)
+  // Keep-alive survives a stream.
+  send(socket, get("/hello"))
+  let assert Ok(reply) = read_response(socket, 1000)
+  reply.2 |> should.equal(<<"hello">>)
+  let _ = server.shutdown(srv)
+}
+
+pub fn streamed_response_to_http_1_0_closes_test() {
+  let #(srv, port) = start(builder())
+  let assert Ok(socket) = connect(port)
+  send(socket, "GET /stream/2 HTTP/1.0\r\n\r\n")
+  let assert Ok(reply) = read_response(socket, 1000)
+  header(reply, "transfer-encoding") |> should.equal("")
+  header(reply, "connection") |> should.equal("close")
+  reply.2 |> should.equal(<<"0\n1\n">>)
+  let _ = server.shutdown(srv)
+}
+
+pub fn shutdown_stops_open_streams_test() {
+  let #(srv, port) = start(builder())
+  let assert Ok(socket) = connect(port)
+  send(socket, get("/forever"))
+  process.sleep(100)
+  // The producer sees emit fail and returns, so shutdown needn't time out.
+  server.shutdown(srv) |> should.equal(Ok(Nil))
+  let assert Ok(reply) = read_response(socket, 1000)
+  reply.0 |> should.equal(200)
+  header(reply, "connection") |> should.equal("keep-alive")
 }
 
 pub fn header_timeout_test() {

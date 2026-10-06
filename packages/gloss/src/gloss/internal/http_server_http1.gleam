@@ -25,10 +25,29 @@ pub type Head {
   )
 }
 
+/// How a request's body is delimited.
+pub type BodyFraming {
+  /// Exactly this many bytes follow the head.
+  Length(Int)
+  /// `Transfer-Encoding: chunked`.
+  Chunked
+}
+
 pub type BodyError {
-  /// `Transfer-Encoding` is set; only `Content-Length` bodies are read.
+  /// A transfer coding other than `chunked`, e.g. `gzip`.
   UnsupportedTransferEncoding
   InvalidContentLength
+  /// Both `Transfer-Encoding` and `Content-Length`: rejected, because
+  /// proxies may disagree about which wins (request smuggling).
+  ConflictingFraming
+}
+
+/// How a response's body is delimited on the wire.
+pub type ResponseFraming {
+  ContentLength(Int)
+  ChunkedResponse
+  /// HTTP/1.0 streams: no framing header, and the connection closes after.
+  UntilClose
 }
 
 pub fn method(name: String) -> Method {
@@ -38,23 +57,60 @@ pub fn method(name: String) -> Method {
   }
 }
 
-/// How many body bytes follow the head: `0` when there is no
-/// `Content-Length`. Repeated identical values are accepted.
-pub fn content_length(head: Head) -> Result(Int, BodyError) {
-  case list.key_find(head.headers, "transfer-encoding") {
-    Ok(_) -> Error(UnsupportedTransferEncoding)
-    Error(Nil) ->
-      case header_values(head, "content-length") |> list.unique {
-        [] -> Ok(0)
-        [value] ->
-          case int.parse(string.trim(value)) {
-            Ok(n) if n >= 0 -> Ok(n)
-            _ -> Error(InvalidContentLength)
-          }
+/// How the request's body is delimited: `Length(0)` when there is no
+/// body. Repeated identical `Content-Length` values are accepted.
+pub fn body_framing(head: Head) -> Result(BodyFraming, BodyError) {
+  let lengths = header_values(head, "content-length") |> list.unique
+  let codings =
+    header_values(head, "transfer-encoding")
+    |> list.flat_map(string.split(_, ","))
+    |> list.map(fn(coding) { string.lowercase(string.trim(coding)) })
+    |> list.filter(fn(coding) { coding != "" })
+  case codings, lengths {
+    [], [] -> Ok(Length(0))
+    [], [value] ->
+      case int.parse(string.trim(value)) {
+        Ok(n) if n >= 0 -> Ok(Length(n))
         _ -> Error(InvalidContentLength)
       }
+    [], _ -> Error(InvalidContentLength)
+    _, [_, ..] -> Error(ConflictingFraming)
+    ["chunked"], [] -> Ok(Chunked)
+    _, [] -> Error(UnsupportedTransferEncoding)
   }
 }
+
+/// The size from a chunk-size line (without its CRLF), ignoring chunk
+/// extensions: `"1a;name=value"` is 26.
+pub fn chunk_size(line: String) -> Result(Int, Nil) {
+  let hex = case string.split_once(line, ";") {
+    Ok(#(hex, _)) -> hex
+    Error(Nil) -> line
+  }
+  let hex = string.trim(hex)
+  case hex != "" && string.length(hex) <= 15 {
+    True ->
+      case int.base_parse(hex, 16) {
+        Ok(n) if n >= 0 -> Ok(n)
+        _ -> Error(Nil)
+      }
+    False -> Error(Nil)
+  }
+}
+
+/// One chunk of a chunked response. Empty data must not be sent this way:
+/// a zero-size chunk ends the body.
+pub fn chunk(data: BytesTree) -> BytesTree {
+  bytes_tree.from_string(
+    int.to_base16(bytes_tree.byte_size(data)) |> string.lowercase,
+  )
+  |> bytes_tree.append_string("\r\n")
+  |> bytes_tree.append_tree(data)
+  |> bytes_tree.append_string("\r\n")
+}
+
+/// Ends a chunked response, with no trailers.
+pub const last_chunk = "0\r\n\r\n"
 
 /// Whether the client wants a `100 Continue` before sending the body.
 pub fn expects_continue(head: Head) -> Bool {
@@ -125,7 +181,7 @@ pub fn encode(
   let head =
     head(
       response,
-      length: bytes_tree.byte_size(response.body),
+      framing: ContentLength(bytes_tree.byte_size(response.body)),
       keep_alive:,
       date:,
     )
@@ -135,28 +191,38 @@ pub fn encode(
   }
 }
 
-/// The status line and headers for a body of `length` bytes sent
-/// separately.
+/// The status line and headers for a body sent separately.
 pub fn head(
   response: Response(a),
-  length length: Int,
+  framing framing: ResponseFraming,
   keep_alive keep_alive: Bool,
   date date: String,
 ) -> BytesTree {
   let headers =
     response.headers
     |> list.filter(fn(header) {
-      !list.contains(["content-length", "date", "connection"], header.0)
+      !list.contains(
+        ["content-length", "transfer-encoding", "date", "connection"],
+        header.0,
+      )
     })
-  let headers = [
-    #("content-length", int.to_string(length)),
-    #("date", date),
-    #("connection", case keep_alive {
-      True -> "keep-alive"
-      False -> "close"
-    }),
-    ..headers
-  ]
+  let framing_headers = case framing {
+    ContentLength(length) -> [#("content-length", int.to_string(length))]
+    ChunkedResponse -> [#("transfer-encoding", "chunked")]
+    UntilClose -> []
+  }
+  let headers =
+    list.flatten([
+      framing_headers,
+      [
+        #("date", date),
+        #("connection", case keep_alive {
+          True -> "keep-alive"
+          False -> "close"
+        }),
+      ],
+      headers,
+    ])
   list.fold(
     headers,
     bytes_tree.from_string(status_line(response.status)),

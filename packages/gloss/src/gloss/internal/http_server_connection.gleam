@@ -6,12 +6,14 @@
 //// middle of a request finishes it, answers with `connection: close`, and
 //// closes.
 
-import gleam/bytes_tree
+import gleam/bit_array
+import gleam/bytes_tree.{type BytesTree}
 import gleam/http
 import gleam/http/response.{type Response}
 import gleam/list
+import gleam/result
 import gloss/http/reply.{type Request}
-import gloss/internal/http_reply_render.{type Wire, SendFile, Sized}
+import gloss/internal/http_reply_render.{type Wire, SendFile, Sized, Stream}
 import gloss/internal/http_server_http1.{type Head, Head} as http1
 import gloss/internal/http_server_tcp.{type Socket} as tcp
 
@@ -111,33 +113,87 @@ fn read_body(
   head: Head,
   draining: Bool,
 ) -> Nil {
-  case http1.content_length(head) {
+  let reject = fn(status, problem) {
+    reject(socket, settings, accept(head), status, problem)
+  }
+  case http1.body_framing(head) {
     Error(http1.UnsupportedTransferEncoding) ->
-      reject(socket, settings, accept(head), 501, UnsupportedTransferEncoding)
+      reject(501, UnsupportedTransferEncoding)
     Error(http1.InvalidContentLength) ->
-      reject(
-        socket,
-        settings,
-        accept(head),
-        400,
-        Malformed("invalid content-length"),
-      )
-    Ok(length) if length > settings.max_body ->
-      reject(socket, settings, accept(head), 413, BodyTooLarge(length))
-    Ok(length) -> {
-      let continued = case length > 0 && http1.expects_continue(head) {
+      reject(400, Malformed("invalid content-length"))
+    Error(http1.ConflictingFraming) ->
+      reject(400, Malformed("both transfer-encoding and content-length"))
+    Ok(http1.Length(length)) if length > settings.max_body ->
+      reject(413, BodyTooLarge(length))
+    Ok(framing) -> {
+      let announced = case framing {
+        http1.Length(length) -> length
+        http1.Chunked -> 1
+      }
+      let continued = case announced > 0 && http1.expects_continue(head) {
         True -> tcp.send(socket, bytes_tree.from_string(http1.continue))
         False -> Ok(Nil)
       }
-      let body = case continued {
-        Ok(Nil) -> tcp.read_body(socket, length, settings.header_timeout)
-        Error(Nil) -> Error(Nil)
+      let body = case continued, framing {
+        Error(Nil), _ -> Error(Closed)
+        Ok(Nil), http1.Length(length) ->
+          tcp.read_body(socket, length, settings.header_timeout)
+          |> result.replace_error(Closed)
+        Ok(Nil), http1.Chunked -> read_chunks(socket, settings, 0, [])
       }
       case body {
         Ok(body) -> respond(socket, settings, head, body, draining)
-        Error(Nil) -> tcp.close(socket)
+        Error(Closed) -> tcp.close(socket)
+        Error(Rejected(status, problem)) -> reject(status, problem)
       }
     }
+  }
+}
+
+type BodyFailure {
+  /// The client went away or was too slow: close without answering.
+  Closed
+  Rejected(status: Int, problem: Problem)
+}
+
+/// Read a chunked body: chunk-size lines, chunk data, then trailers, which
+/// are ignored. `chunks` is newest first.
+fn read_chunks(
+  socket: Socket,
+  settings: Settings,
+  total: Int,
+  chunks: List(BitArray),
+) -> Result(BitArray, BodyFailure) {
+  let timeout = settings.header_timeout
+  use line <- result.try(
+    tcp.read_line(socket, timeout) |> result.replace_error(Closed),
+  )
+  case http1.chunk_size(line) {
+    Error(Nil) -> Error(Rejected(400, Malformed("invalid chunk size")))
+    Ok(0) -> {
+      use Nil <- result.map(skip_trailers(socket, timeout))
+      bit_array.concat(list.reverse(chunks))
+    }
+    Ok(size) if total + size > settings.max_body ->
+      Error(Rejected(413, BodyTooLarge(total + size)))
+    Ok(size) -> {
+      use data <- result.try(
+        tcp.read_body(socket, size, timeout) |> result.replace_error(Closed),
+      )
+      case tcp.read_line(socket, timeout) {
+        Ok("") -> read_chunks(socket, settings, total + size, [data, ..chunks])
+        Ok(_) -> Error(Rejected(400, Malformed("chunk data too long")))
+        Error(Nil) -> Error(Closed)
+      }
+    }
+  }
+}
+
+fn skip_trailers(socket: Socket, timeout: Int) -> Result(Nil, BodyFailure) {
+  case tcp.read_line(socket, timeout) {
+    Ok("") -> Ok(Nil)
+    Ok(_) -> skip_trailers(socket, timeout)
+    Error(Nil) -> Error(Closed)
   }
 }
 
@@ -152,10 +208,9 @@ fn respond(
   // A drain requested while the handler ran is still waiting in the mailbox.
   let draining = draining || tcp.drain_requested()
   let keep_alive = !draining && http1.keep_alive(head)
-  case
-    write(socket, response, keep_alive, head.method == http.Head),
-    keep_alive
-  {
+  let written =
+    write(socket, response, keep_alive, head.method == http.Head, head.version)
+  case written, keep_alive {
     Ok(Nil), True -> await_request(socket, settings)
     _, _ -> tcp.close(socket)
   }
@@ -166,6 +221,7 @@ fn write(
   response: Response(Wire),
   keep_alive: Bool,
   head_request: Bool,
+  version: #(Int, Int),
 ) -> Result(Nil, Nil) {
   let date = tcp.http_date()
   case response.body {
@@ -180,12 +236,57 @@ fn write(
         ),
       )
     SendFile(path:, offset:, length:) -> {
-      let head = http1.head(response, length:, keep_alive:, date:)
+      let framing = http1.ContentLength(length)
+      let head = http1.head(response, framing:, keep_alive:, date:)
       case tcp.send(socket, head), head_request {
         Ok(Nil), False -> tcp.sendfile(socket, path, offset, length)
         result, _ -> result
       }
     }
+    Stream(producer) -> {
+      // HTTP/1.0 has no chunked encoding: send the body bare and close.
+      let #(framing, keep_alive) = case version {
+        #(1, 1) -> #(http1.ChunkedResponse, keep_alive)
+        _ -> #(http1.UntilClose, False)
+      }
+      let head = http1.head(response, framing:, keep_alive:, date:)
+      case tcp.send(socket, head), head_request {
+        Ok(Nil), False -> stream(socket, producer, framing)
+        result, _ -> result
+      }
+    }
+  }
+}
+
+/// Run a stream's producer, sending what it emits. `emit` fails once the
+/// client is gone or the server is draining, so the producer can stop.
+fn stream(
+  socket: Socket,
+  producer: fn(fn(BytesTree) -> Result(Nil, Nil)) -> Nil,
+  framing: http1.ResponseFraming,
+) -> Result(Nil, Nil) {
+  let emit = fn(data: BytesTree) {
+    case tcp.drain_requested(), bytes_tree.byte_size(data) {
+      True, _ -> Error(Nil)
+      False, 0 -> Ok(Nil)
+      False, _ ->
+        case framing {
+          http1.ChunkedResponse -> tcp.send(socket, http1.chunk(data))
+          _ -> tcp.send(socket, data)
+        }
+    }
+  }
+  producer(emit)
+  case framing, tcp.drain_requested() {
+    // Draining: finish the body properly, then close.
+    http1.ChunkedResponse, draining -> {
+      let ended = tcp.send(socket, bytes_tree.from_string(http1.last_chunk))
+      case draining {
+        True -> Error(Nil)
+        False -> ended
+      }
+    }
+    _, _ -> Error(Nil)
   }
 }
 
@@ -199,7 +300,7 @@ fn reject(
 ) -> Nil {
   settings.report(problem)
   let response = settings.render(reply.error(status, message(problem)), accept)
-  let _ = write(socket, response, False, False)
+  let _ = write(socket, response, False, False, #(1, 1))
   tcp.close(socket)
 }
 

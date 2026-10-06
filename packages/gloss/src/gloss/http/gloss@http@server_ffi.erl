@@ -1,7 +1,7 @@
 -module(gloss@http@server_ffi).
 
 -export([listen/3, port/1, accept/1, controlling_process/2, close/1, send/2,
-         sendfile/4, read_range/3, file_info/1, priv_dir/1,
+         sendfile/4, read_range/3, file_info/1, priv_dir/1, read_line/2,
          next/2, read_body/3, drain_requested/0, request_drain/1, await_go/0,
          go/1, rescue/1, random_id/0, http_date/0]).
 
@@ -140,9 +140,35 @@ target(Other) -> to_binary(Other).
 
 %% --- Process coordination ---------------------------------------------------
 
-%% Whether a drain request is waiting, consuming it.
+%% Whether a drain has been requested. The request is remembered, so it
+%% stays true for the rest of the connection.
 drain_requested() ->
-    receive gloss_http_drain -> true after 0 -> false end.
+    receive
+        gloss_http_drain ->
+            put(gloss_http_draining, true),
+            true
+    after 0 ->
+        get(gloss_http_draining) =:= true
+    end.
+
+%% One line in `line` packet mode, without the trailing CRLF (or LF).
+read_line(Socket, Timeout) ->
+    ok = inet:setopts(Socket, [{packet, line}]),
+    Result = gen_tcp:recv(Socket, 0, Timeout),
+    _ = inet:setopts(Socket, [{packet, http_bin}]),
+    case Result of
+        {ok, Line} -> {ok, strip_eol(Line)};
+        {error, _} -> {error, nil}
+    end.
+
+%% string:trim/3 treats CRLF as one grapheme, so strip the bytes directly.
+strip_eol(Line) ->
+    Size = byte_size(Line),
+    case Line of
+        <<Rest:(Size - 2)/binary, "\r\n">> -> Rest;
+        <<Rest:(Size - 1)/binary, "\n">> -> Rest;
+        _ -> Line
+    end.
 
 request_drain(Pid) ->
     Pid ! gloss_http_drain,

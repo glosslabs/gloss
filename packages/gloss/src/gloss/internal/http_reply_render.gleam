@@ -21,12 +21,15 @@ const problem_types = [
 pub type Wire {
   Sized(BytesTree)
   SendFile(path: String, offset: Int, length: Int)
+  Stream(producer: fn(fn(BytesTree) -> Result(Nil, Nil)) -> Nil)
 }
 
-pub fn length(wire: Wire) -> Int {
+/// The body's size, when it is known before sending.
+pub fn length(wire: Wire) -> Result(Int, Nil) {
   case wire {
-    Sized(tree) -> bytes_tree.byte_size(tree)
-    SendFile(length:, ..) -> length
+    Sized(tree) -> Ok(bytes_tree.byte_size(tree))
+    SendFile(length:, ..) -> Ok(length)
+    Stream(_) -> Error(Nil)
   }
 }
 
@@ -38,6 +41,7 @@ pub fn render(
   case res.body {
     reply.File(path:, offset:, length:) ->
       response.set_body(res, SendFile(path:, offset:, length:))
+    reply.Stream(producer) -> response.set_body(res, Stream(producer))
     reply.Json(body) ->
       bytes(res, json.to_string_tree(body) |> bytes_tree.from_string_tree)
     reply.Text(body) -> bytes(res, bytes_tree.from_string(body))

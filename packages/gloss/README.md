@@ -67,13 +67,14 @@ pub fn show(_req: Request, ctx: Context(App)) -> Response {
 | `gloss/http/server` | Builder (`new`, `port`, `bind`, `tracer`, `logger`, `with`, limits), `start`, `supervised`, `shutdown`, and `handle` for tests |
 | `gloss/http/router` | `group`, `with`, `get`/`post`/…, `combine`, `check`, `describe`, `inspect`, `allowed_methods` |
 | `gloss/http/context` | `Context(state)`, `Handler`, `Middleware`, `param`/`int_param` |
-| `gloss/http/reply` | `Request`/`Response`/`Body` types, `json`, `text`, `html`, `bytes`, `empty`, error replies (`error`, `problem`, `not_found`, …), `preferred` |
+| `gloss/http/reply` | `Request`/`Response`/`Body` types, `json`, `text`, `html`, `bytes`, `stream`, `empty`, error replies (`error`, `problem`, `not_found`, …), `preferred` |
 | `gloss/http/body` | `json(req, decoder, next)` and `text(req, next)` |
 | `gloss/http/cookie` | `get`, `all`, `set`, `delete`, with secure `defaults()` |
 | `gloss/http/session` | Server-side sessions: `load`, `get`/`set`/`remove`, `save`, `regenerate`, `destroy`, over a pluggable `Store` |
 | `gloss/http/session/memory` | The default store: an ETS table swept of expired sessions every minute |
 | `gloss/http/csrf` | Cross-site request forgery protection from `Sec-Fetch-Site` and `Origin`, with no tokens |
 | `gloss/http/static` | Files from a directory via `sendfile`, with content types, ETag revalidation and `cache-control` |
+| `gloss/http/sse` | Server-sent events over a streamed response |
 
 ### Errors follow the `Accept` header
 
@@ -129,6 +130,6 @@ caught by the BEAM and stops the node immediately.
 ### Limits
 
 HTTP/1.1 only, without TLS: run behind a proxy that terminates it. Request
-bodies need `Content-Length` (chunked request bodies are answered `501`) and
-are read in full, up to `max_body`. There is no streaming or WebSocket
-support yet.
+bodies may be sent with `Content-Length` or chunked, and are read in full
+up to `max_body`. Responses can be streamed with `reply.stream` (chunked
+for HTTP/1.1). There is no WebSocket support yet.

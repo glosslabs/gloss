@@ -37,15 +37,46 @@ read_response(Socket, Timeout) ->
         {ok, {http_response, _, Status, _}} ->
             Headers = read_headers(Socket, Timeout, []),
             ok = inet:setopts(Socket, [{packet, raw}]),
-            Length = binary_to_integer(proplists:get_value(<<"content-length">>, Headers, <<"0">>)),
-            Body = case Length of
-                0 -> <<>>;
-                _ -> {ok, B} = gen_tcp:recv(Socket, Length, Timeout), B
+            Body = case proplists:get_value(<<"transfer-encoding">>, Headers) of
+                <<"chunked">> -> read_chunks(Socket, Timeout, <<>>);
+                _ ->
+                    case proplists:get_value(<<"content-length">>, Headers) of
+                        undefined -> read_until_closed(Socket, Timeout, <<>>);
+                        Value ->
+                            case binary_to_integer(Value) of
+                                0 -> <<>>;
+                                Length ->
+                                    {ok, B} = gen_tcp:recv(Socket, Length, Timeout),
+                                    B
+                            end
+                    end
             end,
             {ok, {Status, Headers, Body}};
         {error, _} ->
             ok = inet:setopts(Socket, [{packet, raw}]),
             {error, nil}
+    end.
+
+read_chunks(Socket, Timeout, Acc) ->
+    ok = inet:setopts(Socket, [{packet, line}]),
+    {ok, Line} = gen_tcp:recv(Socket, 0, Timeout),
+    Hex = binary:part(Line, 0, byte_size(Line) - 2),
+    Size = binary_to_integer(Hex, 16),
+    ok = inet:setopts(Socket, [{packet, raw}]),
+    case Size of
+        0 ->
+            {ok, <<"\r\n">>} = gen_tcp:recv(Socket, 2, Timeout),
+            Acc;
+        _ ->
+            {ok, Data} = gen_tcp:recv(Socket, Size, Timeout),
+            {ok, <<"\r\n">>} = gen_tcp:recv(Socket, 2, Timeout),
+            read_chunks(Socket, Timeout, <<Acc/binary, Data/binary>>)
+    end.
+
+read_until_closed(Socket, Timeout, Acc) ->
+    case gen_tcp:recv(Socket, 0, Timeout) of
+        {ok, Data} -> read_until_closed(Socket, Timeout, <<Acc/binary, Data/binary>>);
+        {error, _} -> Acc
     end.
 
 read_headers(Socket, Timeout, Acc) ->

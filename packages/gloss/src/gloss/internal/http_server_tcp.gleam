@@ -77,8 +77,12 @@ pub fn read_body(
   timeout: Int,
 ) -> Result(BitArray, Nil)
 
-/// Whether the server has asked this process to drain, consuming the
-/// request.
+/// Read one line, without its CRLF, e.g. a chunk-size line.
+@external(erlang, "gloss@http@server_ffi", "read_line")
+pub fn read_line(socket: Socket, timeout: Int) -> Result(String, Nil)
+
+/// Whether the server has asked this process to drain. Once asked, stays
+/// `True`.
 @external(erlang, "gloss@http@server_ffi", "drain_requested")
 pub fn drain_requested() -> Bool
 

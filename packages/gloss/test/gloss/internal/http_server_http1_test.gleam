@@ -10,22 +10,37 @@ fn head(version: #(Int, Int), headers: List(#(String, String))) {
   Head(method: http.Get, target: "/", version:, headers:)
 }
 
-pub fn content_length_test() {
-  http1.content_length(head(#(1, 1), [])) |> should.equal(Ok(0))
-  http1.content_length(head(#(1, 1), [#("content-length", "12")]))
-  |> should.equal(Ok(12))
-  http1.content_length(
-    head(#(1, 1), [#("content-length", "5"), #("content-length", "5")]),
-  )
-  |> should.equal(Ok(5))
-  http1.content_length(
-    head(#(1, 1), [#("content-length", "5"), #("content-length", "6")]),
-  )
+pub fn body_framing_test() {
+  let framing = fn(headers) { http1.body_framing(head(#(1, 1), headers)) }
+  framing([]) |> should.equal(Ok(http1.Length(0)))
+  framing([#("content-length", "12")]) |> should.equal(Ok(http1.Length(12)))
+  framing([#("content-length", "5"), #("content-length", "5")])
+  |> should.equal(Ok(http1.Length(5)))
+  framing([#("content-length", "5"), #("content-length", "6")])
   |> should.equal(Error(http1.InvalidContentLength))
-  http1.content_length(head(#(1, 1), [#("content-length", "-1")]))
+  framing([#("content-length", "-1")])
   |> should.equal(Error(http1.InvalidContentLength))
-  http1.content_length(head(#(1, 1), [#("transfer-encoding", "chunked")]))
+  framing([#("transfer-encoding", "Chunked")])
+  |> should.equal(Ok(http1.Chunked))
+  framing([#("transfer-encoding", "gzip, chunked")])
   |> should.equal(Error(http1.UnsupportedTransferEncoding))
+  framing([#("transfer-encoding", "chunked"), #("content-length", "3")])
+  |> should.equal(Error(http1.ConflictingFraming))
+}
+
+pub fn chunk_size_test() {
+  http1.chunk_size("1a") |> should.equal(Ok(26))
+  http1.chunk_size("1A;name=value") |> should.equal(Ok(26))
+  http1.chunk_size("0") |> should.equal(Ok(0))
+  http1.chunk_size("") |> should.equal(Error(Nil))
+  http1.chunk_size("zz") |> should.equal(Error(Nil))
+  http1.chunk_size("ffffffffffffffff") |> should.equal(Error(Nil))
+}
+
+pub fn chunk_test() {
+  http1.chunk(bytes_tree.from_string("hello world, again"))
+  |> to_string
+  |> should.equal("12\r\nhello world, again\r\n")
 }
 
 pub fn keep_alive_test() {

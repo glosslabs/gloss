@@ -43,13 +43,16 @@
 ////
 //// ## Limits
 ////
-//// Bodies must be sent with `Content-Length`; a chunked request body is
-//// answered `501`. Responses are always sent with `Content-Length`. There
-//// is no TLS: run behind a proxy that terminates it.
+//// Request bodies may be sent with `Content-Length` or chunked; other
+//// transfer codings are answered `501`, and a request with both framings
+//// `400`. Responses are sent with `Content-Length`, except streams
+//// (`reply.stream`), which are chunked. There is no TLS: run behind a proxy
+//// that terminates it.
 
 import gleam/bytes_tree.{type BytesTree}
 import gleam/dict
 import gleam/erlang/atom.{type Atom}
+import gleam/erlang/process
 import gleam/http
 import gleam/http/request
 import gleam/http/response.{type Response}
@@ -412,7 +415,7 @@ fn report_problem(tracer: Tracer, problem: connection.Problem) -> Nil {
 /// res.status |> should.equal(200)
 /// ```
 ///
-/// File bodies are read into memory. Panics when the router has duplicate
+/// File and streamed bodies are collected into memory. Panics when the router has duplicate
 /// routes.
 pub fn handle(
   builder: Builder(state),
@@ -435,6 +438,18 @@ fn materialise(wire: Wire) -> BytesTree {
         Ok(data) -> bytes_tree.from_bit_array(data)
         Error(Nil) -> bytes_tree.new()
       }
+    reply_render.Stream(producer) -> {
+      let chunks = process.new_subject()
+      producer(fn(chunk) { Ok(process.send(chunks, chunk)) })
+      collect(chunks, bytes_tree.new())
+    }
+  }
+}
+
+fn collect(chunks: process.Subject(BytesTree), tree: BytesTree) -> BytesTree {
+  case process.receive(chunks, 0) {
+    Ok(chunk) -> collect(chunks, bytes_tree.append_tree(tree, chunk))
+    Error(Nil) -> tree
   }
 }
 
@@ -546,7 +561,10 @@ fn span_meta(
     #("route", meta.String(route)),
     #("status", meta.Int(response.status)),
     #("request_id", meta.String(request_id)),
-    #("bytes", meta.Int(reply_render.length(response.body))),
+    case reply_render.length(response.body) {
+      Ok(bytes) -> #("bytes", meta.Int(bytes))
+      Error(Nil) -> #("streamed", meta.Bool(True))
+    },
   ]
 }
 

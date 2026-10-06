@@ -49,7 +49,14 @@ pub type Body {
   /// operating system without reading them into memory. See
   /// `gloss/http/static`.
   File(path: String, offset: Int, length: Int)
+  /// A body written while it is produced; see `stream`.
+  Stream(producer: fn(Emit) -> Nil)
 }
+
+/// Sends one piece of a streamed body. `Error(Nil)` means stop: the client
+/// has gone or the server is shutting down.
+pub type Emit =
+  fn(BytesTree) -> Result(Nil, Nil)
 
 /// A JSON body with `content-type: application/json`.
 pub fn json(status: Int, body: Json) -> Response {
@@ -77,6 +84,29 @@ pub fn html(status: Int, body: String) -> Response {
 pub fn bytes(status: Int, content_type: String, body: BytesTree) -> Response {
   response.new(status)
   |> response.set_body(Bytes(body))
+  |> response.set_header("content-type", content_type)
+}
+
+/// A body sent as it is produced, for long or open-ended responses. The
+/// producer runs in the connection's process after the handler returns,
+/// and each `emit` is sent at once. Stop when `emit` returns `Error`.
+///
+/// ```gleam
+/// reply.stream(200, "text/plain; charset=utf-8", fn(emit) {
+///   use row <- each_until_error(rows)
+///   emit(bytes_tree.from_string(row <> "\n"))
+/// })
+/// ```
+///
+/// HTTP/1.1 clients get chunked transfer encoding. HTTP/1.0 clients get the
+/// bytes unframed, and the connection closes when the producer returns.
+pub fn stream(
+  status: Int,
+  content_type: String,
+  producer: fn(Emit) -> Nil,
+) -> Response {
+  response.new(status)
+  |> response.set_body(Stream(producer))
   |> response.set_header("content-type", content_type)
 }
 
