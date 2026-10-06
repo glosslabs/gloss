@@ -3,7 +3,7 @@
 //// ```gleam
 //// let cors =
 ////   cors.new()
-////   |> cors.allow_origin("https://app.example.com")
+////   |> cors.origins(cors.Listed(["https://app.example.com"]))
 ////   |> cors.allow_credentials(True)
 ////
 //// server.new(routes(), state)
@@ -43,9 +43,14 @@ pub opaque type Config {
   )
 }
 
-type Origins {
+/// Which origins may call the API.
+pub type Origins {
+  /// These origins, e.g. `"https://app.example.com"`: scheme, host and any
+  /// non-default port, with no path.
   Listed(List(String))
+  /// Every origin. Fine for public, read-only APIs.
   Any
+  /// Origins that pass the check, e.g. any subdomain of yours.
   When(fn(String) -> Bool)
 }
 
@@ -63,24 +68,13 @@ pub fn new() -> Config {
   )
 }
 
-/// Allow an origin, e.g. `"https://app.example.com"`: scheme, host and any
-/// non-default port, with no path.
-pub fn allow_origin(config: Config, origin: String) -> Config {
-  case config.origins {
-    Listed(origins) ->
-      Config(..config, origins: Listed([string.lowercase(origin), ..origins]))
-    _ -> Config(..config, origins: Listed([string.lowercase(origin)]))
+/// Which origins may call the API.
+pub fn origins(config: Config, origins: Origins) -> Config {
+  let origins = case origins {
+    Listed(listed) -> Listed(list.map(listed, string.lowercase))
+    other -> other
   }
-}
-
-/// Allow every origin. Fine for public, read-only APIs.
-pub fn allow_any_origin(config: Config) -> Config {
-  Config(..config, origins: Any)
-}
-
-/// Allow origins that pass `check`, e.g. any subdomain of yours.
-pub fn allow_origin_when(config: Config, check: fn(String) -> Bool) -> Config {
-  Config(..config, origins: When(check))
+  Config(..config, origins:)
 }
 
 /// The methods cross-origin requests may use.
@@ -106,9 +100,10 @@ pub fn allow_credentials(config: Config, allow: Bool) -> Config {
   Config(..config, credentials: allow)
 }
 
-/// How long browsers may cache a preflight answer, in seconds.
-pub fn max_age(config: Config, seconds: Int) -> Config {
-  Config(..config, max_age: Some(seconds))
+/// How long browsers may cache a preflight answer, in seconds. `None`
+/// leaves it to the browser (a few seconds).
+pub fn max_age(config: Config, seconds: Option(Int)) -> Config {
+  Config(..config, max_age: seconds)
 }
 
 pub fn middleware(config: Config) -> Middleware(state) {

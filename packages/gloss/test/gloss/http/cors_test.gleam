@@ -2,6 +2,7 @@ import gleam/http
 import gleam/http/request
 import gleam/http/response
 import gleam/list
+import gleam/option.{None}
 import gleam/string
 import gleeunit/should
 import gloss/http/cors
@@ -39,7 +40,7 @@ fn preflight(origin: String, method: String, headers: String) {
 const app = "https://app.example.com"
 
 pub fn preflight_for_an_allowed_origin_test() {
-  let config = cors.new() |> cors.allow_origin(app)
+  let config = cors.new() |> cors.origins(cors.Listed([app]))
   let res = handle(config, preflight(app, "PUT", "Content-Type"))
   res.status |> should.equal(204)
   header(res, "access-control-allow-origin") |> should.equal(app)
@@ -48,11 +49,14 @@ pub fn preflight_for_an_allowed_origin_test() {
   header(res, "access-control-allow-headers")
   |> should.equal("content-type, authorization")
   header(res, "access-control-max-age") |> should.equal("600")
+  handle(config |> cors.max_age(None), preflight(app, "PUT", "Content-Type"))
+  |> header("access-control-max-age")
+  |> should.equal("")
   string.contains(header(res, "vary"), "origin") |> should.be_true
 }
 
 pub fn preflight_refusals_test() {
-  let config = cors.new() |> cors.allow_origin(app)
+  let config = cors.new() |> cors.origins(cors.Listed([app]))
   // Another origin, a method not allowed, a header not allowed.
   [
     preflight("https://evil.example", "GET", ""),
@@ -69,7 +73,7 @@ pub fn preflight_refusals_test() {
 pub fn actual_requests_test() {
   let config =
     cors.new()
-    |> cors.allow_origin(app)
+    |> cors.origins(cors.Listed([app]))
     |> cors.expose_headers(["x-total"])
   let res =
     handle(
@@ -95,13 +99,13 @@ pub fn actual_requests_test() {
 pub fn any_origin_test() {
   let req =
     request(http.Get, "/notes") |> request.set_header("origin", "https://x.dev")
-  handle(cors.new() |> cors.allow_any_origin, req)
+  handle(cors.new() |> cors.origins(cors.Any), req)
   |> header("access-control-allow-origin")
   |> should.equal("*")
   // Credentials can't be combined with `*`: the origin is named instead.
   let res =
     handle(
-      cors.new() |> cors.allow_any_origin |> cors.allow_credentials(True),
+      cors.new() |> cors.origins(cors.Any) |> cors.allow_credentials(True),
       req,
     )
   header(res, "access-control-allow-origin") |> should.equal("https://x.dev")
@@ -111,7 +115,7 @@ pub fn any_origin_test() {
 pub fn origin_predicate_test() {
   let config =
     cors.new()
-    |> cors.allow_origin_when(string.ends_with(_, ".example.com"))
+    |> cors.origins(cors.When(string.ends_with(_, ".example.com")))
   let get = fn(origin) {
     handle(
       config,
@@ -125,7 +129,7 @@ pub fn origin_predicate_test() {
 
 pub fn requests_without_origin_are_untouched_test() {
   let res =
-    handle(cors.new() |> cors.allow_any_origin, request(http.Get, "/notes"))
+    handle(cors.new() |> cors.origins(cors.Any), request(http.Get, "/notes"))
   header(res, "access-control-allow-origin") |> should.equal("")
   header(res, "vary") |> should.equal("")
 }

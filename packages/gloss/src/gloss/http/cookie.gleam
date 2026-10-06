@@ -17,7 +17,7 @@ import gleam/http/cookie as http_cookie
 import gleam/http/request
 import gleam/http/response
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gloss/http/reply.{type Request, type Response}
 
 pub type Attributes =
@@ -44,10 +44,10 @@ pub fn defaults() -> Attributes {
   )
 }
 
-/// Expire the cookie `seconds` from now instead of with the browser
-/// session.
-pub fn max_age(attributes: Attributes, seconds: Int) -> Attributes {
-  http_cookie.Attributes(..attributes, max_age: Some(seconds))
+/// Expire the cookie `seconds` from now, or with the browser session for
+/// `None`.
+pub fn max_age(attributes: Attributes, seconds: Option(Int)) -> Attributes {
+  http_cookie.Attributes(..attributes, max_age: seconds)
 }
 
 /// Whether the cookie is only sent over HTTPS.

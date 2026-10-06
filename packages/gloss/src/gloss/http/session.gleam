@@ -158,7 +158,7 @@ pub fn destroy(session: Session, res: Response) -> Response {
 
 fn attributes(session: Session) -> Attributes {
   let seconds = duration.to_seconds(session.sessions.ttl)
-  cookie.max_age(session.sessions.attributes, float_to_int(seconds))
+  cookie.max_age(session.sessions.attributes, Some(float_to_int(seconds)))
 }
 
 /// 32 random bytes, base64url without padding: safe in a cookie.

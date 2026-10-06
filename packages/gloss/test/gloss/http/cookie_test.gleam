@@ -2,6 +2,7 @@ import gleam/http
 import gleam/http/request
 import gleam/http/response
 import gleam/list
+import gleam/option.{Some}
 import gleam/string
 import gleeunit/should
 import gloss/http/cookie
@@ -35,7 +36,7 @@ pub fn set_uses_secure_defaults_test() {
 pub fn max_age_test() {
   let res =
     reply.empty(204)
-    |> cookie.set("t", "1", cookie.defaults() |> cookie.max_age(3600))
+    |> cookie.set("t", "1", cookie.defaults() |> cookie.max_age(Some(3600)))
   response.get_header(res, "set-cookie")
   |> should.equal(Ok(
     "t=1; Max-Age=3600; Path=/; Secure; HttpOnly; SameSite=Lax",
