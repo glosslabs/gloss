@@ -2,6 +2,7 @@
 //// `gloss@http@server_ffi.erl`.
 
 import gleam/bytes_tree.{type BytesTree}
+import gleam/dynamic
 import gleam/erlang/process.{type Pid}
 
 pub type ListenSocket
@@ -87,6 +88,11 @@ pub fn read_line(socket: Socket, timeout: Int) -> Result(String, Nil)
 
 /// Whether the server has asked this process to drain. Once asked, stays
 /// `True`.
+/// Whether a message is the server's drain request, remembering it for
+/// `drain_requested`.
+@external(erlang, "gloss@http@server_ffi", "is_drain")
+pub fn is_drain(message: dynamic.Dynamic) -> Bool
+
 @external(erlang, "gloss@http@server_ffi", "drain_requested")
 pub fn drain_requested() -> Bool
 

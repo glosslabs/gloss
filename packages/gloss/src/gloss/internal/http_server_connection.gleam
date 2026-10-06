@@ -8,10 +8,12 @@
 
 import gleam/bit_array
 import gleam/bytes_tree.{type BytesTree}
+import gleam/erlang/process
 import gleam/http
 import gleam/http/response.{type Response}
 import gleam/int
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import gloss/http/reply.{type Request}
@@ -41,6 +43,9 @@ pub type Settings {
     /// Milliseconds a kept-alive connection may wait for its next request.
     idle_timeout: Int,
     max_headers: Int,
+    /// Milliseconds a handler may run without the request body making
+    /// progress; `None` for no limit.
+    request_timeout: Option(Int),
     report: fn(Problem) -> Nil,
   )
 }
@@ -51,6 +56,10 @@ pub type Problem {
   HeaderTimeout
   TooManyHeaders
   UnsupportedTransferEncoding
+  /// The handler ran past the request timeout and was stopped.
+  RequestTimeout
+  /// The handler's process died outside the server's panic handling.
+  HandlerCrashed(reason: String)
 }
 
 /// Serve the connection until it closes. Runs in the connection's process,
@@ -317,6 +326,9 @@ type Inflated {
   InflateFailed
 }
 
+@external(erlang, "erlang", "spawn_monitor")
+fn spawn_monitor(run: fn() -> a) -> #(process.Pid, process.Monitor)
+
 @external(erlang, "gloss@http@server_ffi", "inflate_open")
 fn inflate_open() -> Inflater
 
@@ -361,6 +373,7 @@ fn read_exact(
       case tcp.read_body(socket, size, settings.header_timeout) {
         Error(Nil) -> Error(request_body.Incomplete)
         Ok(data) -> {
+          request_body.progress()
           use acc <- result.try(f(acc, data))
           read_exact(socket, settings, remaining - size, acc, f)
         }
@@ -415,11 +428,97 @@ fn respond(
   framing: http1.BodyFraming,
   draining: Bool,
 ) -> Nil {
-  let response = settings.handler(http1.to_request(head, body), settings.peer)
-  // A drain requested while the handler ran is still waiting in the mailbox.
+  case run_handler(settings, http1.to_request(head, body)) {
+    Ok(#(response, status)) ->
+      send_response(socket, settings, head, framing, draining, response, status)
+    Error(problem) -> {
+      let status = case problem {
+        RequestTimeout -> 503
+        _ -> 500
+      }
+      reject(socket, settings, accept(head), status, problem)
+    }
+  }
+}
+
+/// Run the handler in its own process, so it can be stopped at the request
+/// timeout. Each piece of request body it reads restarts the clock.
+fn run_handler(
+  settings: Settings,
+  request: Request,
+) -> Result(#(Response(Wire), request_body.Status), Problem) {
+  let done = process.new_subject()
+  let progress = process.new_subject()
+  let handler = settings.handler
+  let peer = settings.peer
+  let #(pid, monitor) =
+    spawn_monitor(fn() {
+      request_body.watch(progress)
+      let response = handler(request, peer)
+      process.send(done, #(response, request_body.status()))
+    })
+  let selector =
+    process.new_selector()
+    |> process.select_map(done, Finished)
+    |> process.select_map(progress, fn(_) { Progress })
+    |> process.select_specific_monitor(monitor, fn(down) {
+      case down {
+        process.ProcessDown(reason:, ..) -> Crashed(string.inspect(reason))
+        process.PortDown(..) -> Crashed("port down")
+      }
+    })
+    |> process.select_other(fn(message) {
+      // Drain requests are remembered for after the response.
+      case tcp.is_drain(message) {
+        True -> Progress
+        False -> Ignored
+      }
+    })
+  let result = await_handler(selector, settings.request_timeout)
+  case result {
+    Error(RequestTimeout) -> process.kill(pid)
+    _ -> Nil
+  }
+  process.demonitor_process(monitor)
+  result
+}
+
+type HandlerEvent {
+  Finished(#(Response(Wire), request_body.Status))
+  Progress
+  Crashed(String)
+  Ignored
+}
+
+fn await_handler(
+  selector: process.Selector(HandlerEvent),
+  timeout: Option(Int),
+) -> Result(#(Response(Wire), request_body.Status), Problem) {
+  let event = case timeout {
+    Some(ms) -> process.selector_receive(selector, ms)
+    None -> Ok(process.selector_receive_forever(selector))
+  }
+  case event {
+    Ok(Finished(result)) -> Ok(result)
+    Ok(Crashed(reason)) -> Error(HandlerCrashed(reason))
+    Ok(Progress) | Ok(Ignored) -> await_handler(selector, timeout)
+    Error(Nil) -> Error(RequestTimeout)
+  }
+}
+
+fn send_response(
+  socket: Socket,
+  settings: Settings,
+  head: Head,
+  framing: http1.BodyFraming,
+  draining: Bool,
+  response: Response(Wire),
+  status: request_body.Status,
+) -> Nil {
+  // A drain requested while the handler ran is remembered.
   let draining = draining || tcp.drain_requested()
   // Unread or half-read body bytes would be taken for the next request.
-  let consumed = case request_body.status(), framing {
+  let consumed = case status, framing {
     request_body.Buffered(_), _ | request_body.Streamed, _ -> True
     request_body.Unread, http1.Length(0) -> True
     _, _ -> False
@@ -569,6 +668,8 @@ pub fn message(problem: Problem) -> String {
     HeaderTimeout -> "request timeout"
     TooManyHeaders -> "too many headers"
     UnsupportedTransferEncoding -> "transfer-encoding is not supported"
+    RequestTimeout -> "request timed out"
+    HandlerCrashed(_) -> "internal server error"
   }
 }
 

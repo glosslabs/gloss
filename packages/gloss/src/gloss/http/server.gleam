@@ -58,7 +58,7 @@ import gleam/http/request
 import gleam/http/response.{type Response}
 import gleam/int
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
@@ -92,6 +92,7 @@ pub opaque type Builder(state) {
     max_headers: Int,
     header_timeout: Duration,
     idle_timeout: Duration,
+    request_timeout: Option(Duration),
     shutdown_timeout: Duration,
     acceptors: Int,
     trusted_proxies: List(forwarded.Cidr),
@@ -154,6 +155,7 @@ pub fn new(router: Router(state), state: state) -> Builder(state) {
     max_headers: 100,
     header_timeout: duration.seconds(10),
     idle_timeout: duration.seconds(60),
+    request_timeout: Some(duration.seconds(30)),
     shutdown_timeout: duration.seconds(10),
     acceptors: 10,
     trusted_proxies: [],
@@ -221,6 +223,20 @@ pub fn idle_timeout(
   timeout: Duration,
 ) -> Builder(state) {
   Builder(..builder, idle_timeout: timeout)
+}
+
+/// How long a handler may run before it is stopped and the client gets
+/// `503 request timed out`. Each piece of request body the handler reads
+/// restarts the clock, so a steady upload is never cut off; only a handler
+/// that is stuck or waiting on something else is. Streamed responses and
+/// WebSocket sessions are not limited, as they run after the handler
+/// returns. `None` lets handlers run for as long as they take. Default
+/// `Some(duration.seconds(30))`.
+pub fn request_timeout(
+  builder: Builder(state),
+  timeout: Option(Duration),
+) -> Builder(state) {
+  Builder(..builder, request_timeout: timeout)
 }
 
 /// How long `shutdown` waits for in-flight requests before closing their
@@ -363,6 +379,7 @@ fn start_control(
       header_timeout: ms(builder.header_timeout),
       idle_timeout: ms(builder.idle_timeout),
       max_headers: builder.max_headers,
+      request_timeout: option.map(builder.request_timeout, ms),
       report: report_problem(builder.tracer, _),
     )
   let config =
@@ -418,15 +435,15 @@ fn start_error(builder: Builder(state), error: actor.StartError) -> StartError {
 }
 
 fn report_problem(tracer: Tracer, problem: connection.Problem) -> Nil {
-  use <- tracer.point(
-    tracer,
-    source:,
-    name: "request.rejected",
-    level: tracer.Warning,
-  )
+  let #(name, level) = case problem {
+    connection.RequestTimeout -> #("request.timeout", tracer.Warning)
+    connection.HandlerCrashed(_) -> #("request.crashed", tracer.Error)
+    _ -> #("request.rejected", tracer.Warning)
+  }
+  use <- tracer.point(tracer, source:, name:, level:)
   let reason = [#("reason", meta.String(connection.message(problem)))]
   case problem {
-    connection.Malformed(detail:) -> [
+    connection.Malformed(detail:) | connection.HandlerCrashed(reason: detail) -> [
       #("detail", meta.String(detail)),
       ..reason
     ]

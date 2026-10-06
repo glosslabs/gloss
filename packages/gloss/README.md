@@ -64,7 +64,7 @@ pub fn show(_req: Request, ctx: Context(App)) -> Response {
 
 | Module | |
 |---|---|
-| `gloss/http/server` | Builder (`new`, `port`, `bind`, `tracer`, `logger`, `with`, `trust_proxies`, limits), `start`, `supervised`, `shutdown`, and `handle` for tests |
+| `gloss/http/server` | Builder (`new`, `port`, `bind`, `tracer`, `logger`, `with`, `trust_proxies`, `request_timeout`, limits), `start`, `supervised`, `shutdown`, and `handle` for tests |
 | `gloss/http/router` | `group`, `with`, `get`/`post`/…, `combine`, `check`, `describe`, `inspect`, `allowed_methods` |
 | `gloss/http/context` | `Context(state)`, `Handler`, `Middleware`, `param`/`int_param` |
 | `gloss/http/reply` | `Request`/`Response`/`Body` types, `json`, `text`, `html`, `bytes`, `stream`, `empty`, error replies (`error`, `problem`, `not_found`, …), `preferred` |

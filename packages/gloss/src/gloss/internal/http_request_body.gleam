@@ -6,6 +6,7 @@
 //// reused) and so a second buffered read returns the same bytes.
 
 import gleam/bit_array
+import gleam/erlang/process.{type Subject}
 
 pub type RequestBody {
   RequestBody(
@@ -66,6 +67,26 @@ pub type Status {
 
 const key = "gloss_http_body"
 
+const watcher_key = "gloss_http_body_watcher"
+
+/// Tell `watcher` each time some of the body arrives, so a deadline on the
+/// request can count progress.
+pub fn watch(watcher: Subject(Nil)) -> Nil {
+  put(watcher_key, watcher)
+  Nil
+}
+
+/// Report that some of the body arrived.
+pub fn progress() -> Nil {
+  case get_watcher(watcher_key) {
+    Ok(watcher) -> process.send(watcher, Nil)
+    Error(Nil) -> Nil
+  }
+}
+
+@external(erlang, "gloss@http@server_ffi", "pdict_get")
+fn get_watcher(key: String) -> Result(Subject(Nil), Nil)
+
 pub fn status() -> Status {
   case get(key) {
     Ok(status) -> status
@@ -87,7 +108,7 @@ pub fn reset() -> Nil {
 fn get(key: String) -> Result(Status, Nil)
 
 @external(erlang, "erlang", "put")
-fn put(key: String, value: Status) -> a
+fn put(key: String, value: anything) -> a
 
 @external(erlang, "erlang", "erase")
 fn erase(key: String) -> a
