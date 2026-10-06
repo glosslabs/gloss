@@ -3,7 +3,7 @@
 //// A `Logger` is a destination for `Entry`s. Build one from a channel
 //// (`stderr`, `otp`, `memory`, `discard`, or `new` with your own writer),
 //// shape it with `min_level`, `with_context` and `stack`, then write to it
-//// with `debug`, `info`, `warning` and `error`:
+//// through its own `debug`, `info`, `warning` and `error` functions:
 ////
 //// ```gleam
 //// let log =
@@ -12,7 +12,7 @@
 ////     logger.otp() |> logger.min_level(logger.Warning),
 ////   ])
 ////   |> logger.with_context([#("app", meta.String("billing"))])
-//// logger.info(log, "transfer completed", [#("transfer", meta.String("t-17"))])
+//// log.info("transfer completed", [#("transfer", meta.String("t-17"))])
 //// ```
 ////
 //// To log everything a `Tracer` sees, attach `trace_handler`:
@@ -48,22 +48,40 @@ pub type Entry {
 pub type Writer =
   fn(Entry) -> Nil
 
-pub opaque type Logger {
-  Logger(write: fn(Entry) -> Nil)
+/// A destination for entries, carrying the functions that write to it:
+/// `log.info("started", [])`. Every field is derived from one writer, so
+/// build loggers with `new`, a channel or a combinator rather than with
+/// the constructor.
+pub type Logger {
+  Logger(
+    /// Write an entry at `level`, stamped with the current time.
+    log: fn(Level, String, Meta) -> Nil,
+    debug: fn(String, Meta) -> Nil,
+    info: fn(String, Meta) -> Nil,
+    warning: fn(String, Meta) -> Nil,
+    error: fn(String, Meta) -> Nil,
+    /// Deliver an entry as-is, without stamping the time.
+    write: Writer,
+  )
 }
 
 pub fn new(write: Writer) -> Logger {
-  Logger(write:)
-}
-
-/// Deliver an entry as-is, without stamping the time.
-pub fn write(logger: Logger, record: Entry) -> Nil {
-  logger.write(record)
+  let log = fn(level, message, meta) {
+    write(Entry(level:, message:, meta:, at: timestamp.system_time()))
+  }
+  Logger(
+    log:,
+    debug: fn(message, meta) { log(Debug, message, meta) },
+    info: fn(message, meta) { log(Info, message, meta) },
+    warning: fn(message, meta) { log(Warning, message, meta) },
+    error: fn(message, meta) { log(Error, message, meta) },
+    write:,
+  )
 }
 
 /// Write every entry to each logger, in order.
 pub fn stack(loggers: List(Logger)) -> Logger {
-  Logger(fn(record) {
+  new(fn(record) {
     use logger <- list.each(loggers)
     logger.write(record)
   })
@@ -72,7 +90,7 @@ pub fn stack(loggers: List(Logger)) -> Logger {
 /// Drop entries below `level`.
 pub fn min_level(logger: Logger, level: Level) -> Logger {
   let floor = rank(level)
-  Logger(fn(record) {
+  new(fn(record) {
     case rank(record.level) >= floor {
       True -> logger.write(record)
       False -> Nil
@@ -82,45 +100,24 @@ pub fn min_level(logger: Logger, level: Level) -> Logger {
 
 /// Prepend `context` to every entry's meta. Context added earlier comes first.
 pub fn with_context(logger: Logger, context: Meta) -> Logger {
-  Logger(fn(record) {
+  new(fn(record) {
     logger.write(Entry(..record, meta: list.append(context, record.meta)))
   })
 }
 
-/// Write an entry at `level`, stamped with the current time.
-pub fn log(logger: Logger, level: Level, message: String, meta: Meta) -> Nil {
-  logger.write(Entry(level:, message:, meta:, at: timestamp.system_time()))
-}
-
-pub fn debug(logger: Logger, message: String, meta: Meta) -> Nil {
-  log(logger, Debug, message, meta)
-}
-
-pub fn info(logger: Logger, message: String, meta: Meta) -> Nil {
-  log(logger, Info, message, meta)
-}
-
-pub fn warning(logger: Logger, message: String, meta: Meta) -> Nil {
-  log(logger, Warning, message, meta)
-}
-
-pub fn error(logger: Logger, message: String, meta: Meta) -> Nil {
-  log(logger, Error, message, meta)
-}
-
 /// One `format`ted line per entry on standard error.
 pub fn stderr() -> Logger {
-  Logger(fn(record) { io.println_error(format(record)) })
+  new(fn(record) { io.println_error(format(record)) })
 }
 
 /// Send every entry to `subject`. For tests.
 pub fn memory(subject: Subject(Entry)) -> Logger {
-  Logger(process.send(subject, _))
+  new(process.send(subject, _))
 }
 
 /// Throw entries away.
 pub fn discard() -> Logger {
-  Logger(fn(_) { Nil })
+  new(fn(_) { Nil })
 }
 
 /// Forward to Erlang's `logger` at the same level, with the meta both
@@ -132,7 +129,7 @@ pub fn discard() -> Logger {
 /// `Debug`; raise it with `logger:set_primary_config(level, info)` or in
 /// `sys.config`.
 pub fn otp() -> Logger {
-  Logger(fn(record) {
+  new(fn(record) {
     otp_log(level_atom(record.level), with_meta(record), record.meta)
   })
 }

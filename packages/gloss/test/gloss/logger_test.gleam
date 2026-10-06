@@ -20,8 +20,8 @@ const task = #("task", meta.String("t"))
 pub fn new_stamps_now_test() {
   let seen = process.new_subject()
   let before = timestamp.system_time()
-  logger.new(process.send(seen, _))
-  |> logger.info("m", [#("k", meta.Int(1))])
+  let log = logger.new(process.send(seen, _))
+  log.info("m", [#("k", meta.Int(1))])
   let after = timestamp.system_time()
   let assert [Entry(level: logger.Info, message: "m", meta: m, at:)] =
     drain(seen)
@@ -32,11 +32,11 @@ pub fn new_stamps_now_test() {
 
 pub fn level_functions_test() {
   let #(log, seen) = capture()
-  logger.debug(log, "d", [])
-  logger.info(log, "i", [])
-  logger.warning(log, "w", [])
-  logger.error(log, "e", [])
-  logger.log(log, logger.Debug, "l", [])
+  log.debug("d", [])
+  log.info("i", [])
+  log.warning("w", [])
+  log.error("e", [])
+  log.log(logger.Debug, "l", [])
   drain(seen)
   |> list.map(fn(r) { #(r.level, r.message) })
   |> should.equal([
@@ -69,22 +69,22 @@ pub fn stack_writes_in_order_test() {
   let seen = process.new_subject()
   let a = logger.new(fn(r) { process.send(seen, #("a", r.message)) })
   let b = logger.new(fn(r) { process.send(seen, #("b", r.message)) })
-  logger.stack([a, b]) |> logger.info("x", [])
+  logger.stack([a, b]).info("x", [])
   drain(seen) |> should.equal([#("a", "x"), #("b", "x")])
-  logger.stack([]) |> logger.info("y", []) |> should.equal(Nil)
+  logger.stack([]).info("y", []) |> should.equal(Nil)
 }
 
 pub fn min_level_filters_test() {
   let #(log, seen) = capture()
   let warnings = log |> logger.min_level(logger.Warning)
-  logger.debug(warnings, "d", [])
-  logger.info(warnings, "i", [])
-  logger.warning(warnings, "w", [])
-  logger.error(warnings, "e", [])
+  warnings.debug("d", [])
+  warnings.info("i", [])
+  warnings.warning("w", [])
+  warnings.error("e", [])
   drain(seen) |> list.map(fn(r) { r.message }) |> should.equal(["w", "e"])
 
   let everything = log |> logger.min_level(logger.Debug)
-  logger.debug(everything, "d", [])
+  everything.debug("d", [])
   drain(seen) |> list.map(fn(r) { r.message }) |> should.equal(["d"])
 }
 
@@ -93,32 +93,30 @@ pub fn with_context_prepends_test() {
   let a = #("a", meta.Int(1))
   let b = #("b", meta.Int(2))
   let k = #("k", meta.Int(3))
-  log |> logger.with_context([a]) |> logger.info("m", [k])
-  log
-  |> logger.with_context([a])
-  |> logger.with_context([b])
-  |> logger.info("m", [k])
+  logger.with_context(log, [a]).info("m", [k])
+  let nested = log |> logger.with_context([a]) |> logger.with_context([b])
+  nested.info("m", [k])
   drain(seen)
   |> list.map(fn(r) { r.meta })
   |> should.equal([[a, k], [a, b, k]])
 }
 
 pub fn discard_test() {
-  logger.discard() |> logger.error("x", []) |> should.equal(Nil)
+  logger.discard().error("x", []) |> should.equal(Nil)
 }
 
 /// Info and Debug sit below OTP's default `notice` level, so this runs the
 /// whole FFI path without printing into the test output.
 pub fn otp_channel_does_not_crash_test() {
   let log = logger.otp()
-  logger.info(log, "gloss logger smoke", [
+  log.info("gloss logger smoke", [
     #("s", meta.String("x")),
     #("i", meta.Int(1)),
     #("f", meta.Float(1.5)),
     #("b", meta.Bool(True)),
   ])
   |> should.equal(Nil)
-  logger.debug(log, "no meta", []) |> should.equal(Nil)
+  log.debug("no meta", []) |> should.equal(Nil)
 }
 
 pub fn from_event_point_test() {

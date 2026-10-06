@@ -25,7 +25,7 @@ pub fn main() {
     scheduler.new()
     |> scheduler.tracer(ctx.tracer)
     |> scheduler.on_failed(fn(failed) {
-      logger.warning(ctx.log, "task needs attention", [
+      ctx.log.warning("task needs attention", [
         #("task", meta.String(failed.task)),
         #("error", meta.String(failed.error)),
       ])
