@@ -69,6 +69,7 @@ pub fn show(_req: Request, ctx: Context(App)) -> Response {
 | `gloss/http/context` | `Context(state)`, `Handler`, `Middleware`, `param`/`int_param` |
 | `gloss/http/reply` | `Request`/`Response`/`Body` types, `json`, `text`, `html`, `bytes`, `empty`, error replies (`error`, `problem`, `not_found`, …), `preferred` |
 | `gloss/http/body` | `json(req, decoder, next)` and `text(req, next)` |
+| `gloss/http/cookie` | `get`, `all`, `set`, `delete`, with secure `defaults()` |
 
 ### Errors follow the `Accept` header
 
