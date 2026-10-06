@@ -32,7 +32,7 @@ pub type SameSite =
 /// `Secure` is on even for plain HTTP, because the server usually sits
 /// behind a proxy that terminates TLS. Browsers accept secure cookies from
 /// `http://localhost`, except Safari. For Safari in development use
-/// `Attributes(..cookie.defaults(), secure: False)`.
+/// `cookie.defaults() |> cookie.secure(False)`.
 pub fn defaults() -> Attributes {
   http_cookie.Attributes(
     max_age: None,
@@ -44,9 +44,25 @@ pub fn defaults() -> Attributes {
   )
 }
 
-/// The same as `defaults`, expiring after `seconds`.
+/// Expire the cookie `seconds` from now instead of with the browser
+/// session.
 pub fn max_age(attributes: Attributes, seconds: Int) -> Attributes {
   http_cookie.Attributes(..attributes, max_age: Some(seconds))
+}
+
+/// Whether the cookie is only sent over HTTPS.
+pub fn secure(attributes: Attributes, secure: Bool) -> Attributes {
+  http_cookie.Attributes(..attributes, secure:)
+}
+
+/// Limit the cookie to paths under `path`.
+pub fn path(attributes: Attributes, path: String) -> Attributes {
+  http_cookie.Attributes(..attributes, path: Some(path))
+}
+
+/// Share the cookie with `domain` and its subdomains.
+pub fn domain(attributes: Attributes, domain: String) -> Attributes {
+  http_cookie.Attributes(..attributes, domain: Some(domain))
 }
 
 /// The value of the cookie `name` sent with the request.
