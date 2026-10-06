@@ -32,13 +32,16 @@
 ////
 //// A `Span` is a span: `source` is the instrumentation scope, `name` the span
 //// name, `at` the start time, `at` plus `duration` the end time, `meta` the
-//// attributes, and `error` the status (`Some` is status Error with that
-//// description). A `Point` is a log record or span event: `level` is the
-//// severity and `meta` the attributes.
+//// attributes, `error` the status (`Some` is status Error with that
+//// description), and `trace` and `parent_span_id` its identity in the
+//// trace. A `Point` is a log record or span event: `level` is the severity,
+//// `meta` the attributes, and `trace` the span it happened in, if any.
 
+import gleam/bit_array
 import gleam/erlang/atom.{type Atom}
 import gleam/list
 import gleam/option.{type Option, None}
+import gleam/string
 import gleam/time/duration.{type Duration}
 import gleam/time/timestamp.{type Timestamp}
 import gloss/meta.{type Meta}
@@ -65,10 +68,49 @@ pub type Event {
     duration: Duration,
     /// The failure, when the work failed.
     error: Option(String),
+    /// This span's trace and id.
+    trace: SpanContext,
+    /// The span this one is part of, when it has one.
+    parent_span_id: Option(String),
   )
   /// A moment in time.
-  Point(source: String, name: String, at: Timestamp, meta: Meta, level: Level)
+  Point(
+    source: String,
+    name: String,
+    at: Timestamp,
+    meta: Meta,
+    level: Level,
+    /// The span this happened in, if any.
+    trace: Option(SpanContext),
+  )
 }
+
+/// Where a span sits in a distributed trace, in W3C Trace Context form.
+pub type SpanContext {
+  SpanContext(
+    /// 32 lowercase hex characters, shared by every span in the trace.
+    trace_id: String,
+    /// 16 lowercase hex characters, unique to the span.
+    span_id: String,
+  )
+}
+
+/// A span starting a new trace.
+pub fn root() -> SpanContext {
+  SpanContext(trace_id: random_hex(16), span_id: random_hex(8))
+}
+
+/// A new span in `parent`'s trace.
+pub fn child(parent: SpanContext) -> SpanContext {
+  SpanContext(..parent, span_id: random_hex(8))
+}
+
+fn random_hex(bytes: Int) -> String {
+  strong_rand_bytes(bytes) |> bit_array.base16_encode |> string.lowercase
+}
+
+@external(erlang, "crypto", "strong_rand_bytes")
+fn strong_rand_bytes(n: Int) -> BitArray
 
 pub type Level {
   Debug
@@ -105,7 +147,7 @@ pub fn emit(tracer: Tracer, event: fn() -> Event) -> Nil {
   }
 }
 
-/// Emit a `Point` stamped with the current time.
+/// Emit a `Point` stamped with the current time, outside any span.
 pub fn point(
   tracer: Tracer,
   source source: String,
@@ -114,7 +156,14 @@ pub fn point(
   meta meta: fn() -> Meta,
 ) -> Nil {
   use <- emit(tracer)
-  Point(source:, name:, at: timestamp.system_time(), meta: meta(), level:)
+  Point(
+    source:,
+    name:,
+    at: timestamp.system_time(),
+    meta: meta(),
+    level:,
+    trace: None,
+  )
 }
 
 /// Run `work`, emit a `Span` for it, and return its result. `work` always
@@ -128,8 +177,8 @@ pub fn point(
 /// run_query(sql)
 /// ```
 ///
-/// `work` is opaque to `span`: the span's `error` is always `None`, and
-/// nothing is emitted if `work` panics.
+/// The span starts a new trace. `work` is opaque to `span`: the span's
+/// `error` is always `None`, and nothing is emitted if `work` panics.
 pub fn span(
   tracer: Tracer,
   source source: String,
@@ -145,7 +194,16 @@ pub fn span(
       let result = work()
       let duration = duration.nanoseconds(monotonic_ns() - started)
       emit(tracer, fn() {
-        Span(source:, name:, at:, meta: meta(), duration:, error: None)
+        Span(
+          source:,
+          name:,
+          at:,
+          meta: meta(),
+          duration:,
+          error: None,
+          trace: root(),
+          parent_span_id: None,
+        )
       })
       result
     }

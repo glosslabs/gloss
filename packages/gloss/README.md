@@ -106,8 +106,8 @@ server.new(routes(), state)
 
 Every request produces one `tracer.Span` from source `"gloss.http"`, named
 after its route (`"GET /notes/:id"`), with method, path, route, status,
-request id, size, and the W3C trace ids (`trace_id`, `span_id`,
-`parent_span_id`) in its meta. A panic or 5xx status marks the span as
+request id and size in its meta. Its `trace` and `parent_span_id` fields
+place it in the W3C trace the request belongs to. A panic or 5xx status marks the span as
 failed. Wire the tracer once and the rest follows:
 
 ```gleam

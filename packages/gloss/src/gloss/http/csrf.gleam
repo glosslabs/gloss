@@ -26,9 +26,12 @@
 import gleam/http
 import gleam/http/request
 import gleam/list
+import gleam/option.{Some}
 import gleam/string
+import gleam/time/timestamp
 import gloss/http/context.{type Context, type Handler, type Middleware}
 import gloss/http/reply.{type Request}
+import gloss/http/traceparent
 import gloss/meta
 import gloss/tracer
 
@@ -53,20 +56,21 @@ pub fn middleware(config: Config) -> Middleware(state) {
       case check(config, req) {
         Ok(Nil) -> next(req, ctx)
         Error(reason) -> {
-          tracer.point(
-            ctx.tracer,
-            source: "gloss.http",
-            name: "csrf.rejected",
-            level: tracer.Warning,
-            meta: fn() {
-              [
+          tracer.emit(ctx.tracer, fn() {
+            tracer.Point(
+              source: "gloss.http",
+              name: "csrf.rejected",
+              at: timestamp.system_time(),
+              level: tracer.Warning,
+              meta: [
                 #("reason", meta.String(reason)),
                 #("method", meta.String(http.method_to_string(req.method))),
                 #("path", meta.String(req.path)),
                 #("request_id", meta.String(ctx.request_id)),
-              ]
-            },
-          )
+              ],
+              trace: Some(traceparent.span_context(ctx.trace)),
+            )
+          })
           reply.error(403, "cross-origin request rejected")
         }
       }

@@ -19,6 +19,8 @@ fn span_error(error: String) -> tracer.Event {
     meta: [#("task", meta.String("t"))],
     duration: duration.seconds(2),
     error: Some(error),
+    trace: trace(),
+    parent_span_id: None,
   )
 }
 
@@ -29,6 +31,7 @@ fn point(name: String) -> tracer.Event {
     at: timestamp.system_time(),
     meta: [],
     level: tracer.Info,
+    trace: None,
   )
 }
 
@@ -40,6 +43,8 @@ fn span_ok() -> tracer.Event {
     meta: [],
     duration: duration.seconds(1),
     error: None,
+    trace: trace(),
+    parent_span_id: None,
   )
 }
 
@@ -178,4 +183,11 @@ pub fn logger_sends_a_full_batch_test() {
   |> list.length
   |> should.equal(100)
   gloss_sentry.stop(sentry)
+}
+
+fn trace() -> tracer.SpanContext {
+  tracer.SpanContext(
+    trace_id: "4bf92f3577b34da6a3ce929d0e0e4736",
+    span_id: "00f067aa0ba902b7",
+  )
 }

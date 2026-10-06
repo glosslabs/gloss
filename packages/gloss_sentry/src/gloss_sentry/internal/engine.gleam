@@ -122,6 +122,7 @@ pub fn handle(
           body,
           [],
           meta,
+          None,
         )
       let #(state, effects) = enqueue(state, event, now)
       let message = case body {
@@ -303,6 +304,7 @@ fn build(
   body: envelope.Body,
   tags: List(#(String, String)),
   extra: Meta,
+  trace: Option(envelope.Trace),
 ) -> Event {
   let settings = state.settings
   envelope.Event(
@@ -317,6 +319,7 @@ fn build(
     environment: settings.environment,
     release: settings.release,
     server_name: settings.server_name,
+    trace:,
   )
 }
 
@@ -328,7 +331,16 @@ fn to_event(
   event_id: fn() -> String,
 ) -> Option(Event) {
   case event {
-    tracer.Span(source:, name:, at:, meta: m, duration:, error: Some(error)) ->
+    tracer.Span(
+      source:,
+      name:,
+      at:,
+      meta: m,
+      duration:,
+      error: Some(error),
+      trace:,
+      parent_span_id:,
+    ) ->
       Some(build(
         state,
         event_id(),
@@ -348,8 +360,13 @@ fn to_event(
           #("duration_ms", int.to_string(duration.to_milliseconds(duration))),
         ],
         m,
+        Some(envelope.Trace(
+          trace_id: trace.trace_id,
+          span_id: trace.span_id,
+          parent_span_id:,
+        )),
       ))
-    tracer.Point(source:, name:, at:, meta: m, level: tracer.Error) ->
+    tracer.Point(source:, name:, at:, meta: m, level: tracer.Error, trace:) ->
       Some(build(
         state,
         event_id(),
@@ -362,8 +379,15 @@ fn to_event(
           #("name", name),
         ],
         m,
+        option.map(trace, fn(trace) {
+          envelope.Trace(
+            trace_id: trace.trace_id,
+            span_id: trace.span_id,
+            parent_span_id: None,
+          )
+        }),
       ))
-    tracer.Point(source:, name:, at:, meta: m, level: tracer.Warning) ->
+    tracer.Point(source:, name:, at:, meta: m, level: tracer.Warning, trace:) ->
       Some(build(
         state,
         event_id(),
@@ -376,6 +400,13 @@ fn to_event(
           #("name", name),
         ],
         m,
+        option.map(trace, fn(trace) {
+          envelope.Trace(
+            trace_id: trace.trace_id,
+            span_id: trace.span_id,
+            parent_span_id: None,
+          )
+        }),
       ))
     _ -> None
   }
@@ -384,7 +415,7 @@ fn to_event(
 /// Every tracer event is a breadcrumb for the errors that follow it.
 fn trace_crumb(event: tracer.Event) -> Breadcrumb {
   case event {
-    tracer.Span(source:, name:, at:, meta: m, duration:, error:) -> {
+    tracer.Span(source:, name:, at:, meta: m, duration:, error:, ..) -> {
       let took = #("duration_ms", meta.Int(duration.to_milliseconds(duration)))
       let #(message, level) = case error {
         None -> #(name, envelope.Info)
@@ -398,7 +429,7 @@ fn trace_crumb(event: tracer.Event) -> Breadcrumb {
         data: list.append(m, [took]),
       )
     }
-    tracer.Point(source:, name:, at:, meta: m, level:) ->
+    tracer.Point(source:, name:, at:, meta: m, level:, ..) ->
       envelope.Breadcrumb(
         at:,
         category: source,

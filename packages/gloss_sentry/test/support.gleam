@@ -3,6 +3,7 @@ import gleam/erlang/process.{type Subject}
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/json
+import gleam/option.{None}
 import gleam/string
 import gleam/time/calendar.{Date, TimeOfDay}
 import gleam/time/timestamp.{type Timestamp}
@@ -92,5 +93,6 @@ pub fn event(level: envelope.Level, body: envelope.Body) -> Event {
     environment: "test",
     release: "",
     server_name: "box",
+    trace: None,
   )
 }

@@ -1,6 +1,7 @@
 import gleam/erlang/process
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp
 import gleeunit/should
@@ -59,6 +60,8 @@ pub fn dispatch_order_is_typed_then_any_then_tracer_test() {
   ])
 }
 
+const fixed = tracer.SpanContext(trace_id: "t", span_id: "s")
+
 pub fn to_trace_test() {
   let at = utc(2026, 10, 6, 12, 0)
   let took = duration.seconds(2)
@@ -71,14 +74,29 @@ pub fn to_trace_test() {
       meta:,
       duration: took,
       error: Some("boom"),
+      trace: fixed,
+      parent_span_id: None,
     )
+  // Each run is a new trace, with random ids: compare the rest.
+  let trace = fn(event) {
+    case event {
+      tracer.Span(trace:, ..) -> {
+        string.length(trace.trace_id) |> should.equal(32)
+        tracer.Span(..event, trace: fixed)
+      }
+      _ -> event
+    }
+  }
   scheduler.to_trace(task.TaskFailed(task.Failed("t", at, took, "boom")))
+  |> trace
   |> should.equal(failed)
   scheduler.to_trace(task.TaskCrashed(task.Crashed("t", at, took, "exit")))
+  |> trace
   |> should.equal(
     tracer.Span(..failed, name: "task.crashed", error: Some("exit")),
   )
   scheduler.to_trace(task.TaskSucceeded(task.Succeeded("t", at, took)))
+  |> trace
   |> should.equal(tracer.Span(..failed, name: "task.succeeded", error: None))
 
   let started =
@@ -88,6 +106,7 @@ pub fn to_trace_test() {
       at:,
       meta:,
       level: tracer.Info,
+      trace: None,
     )
   scheduler.to_trace(task.TaskStarted(task.Started("t", at)))
   |> should.equal(started)

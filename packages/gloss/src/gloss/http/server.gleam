@@ -511,9 +511,14 @@ fn pipeline(
         source:,
         name: span_name(request.method, route),
         at:,
-        meta: span_meta(request, route, response, request_id, trace, upstream),
+        meta: span_meta(request, route, response, request_id),
         duration: duration.nanoseconds(monotonic_ns() - started),
         error: failure,
+        trace: traceparent.span_context(trace),
+        parent_span_id: case upstream {
+          Ok(parent) -> Some(parent.span_id)
+          Error(Nil) -> None
+        },
       )
     })
     response
@@ -572,16 +577,8 @@ fn span_meta(
   route: String,
   response: Response(Wire),
   request_id: String,
-  trace: TraceParent,
-  upstream: Result(TraceParent, Nil),
 ) -> meta.Meta {
-  let parent = case upstream {
-    Ok(parent) -> [#("parent_span_id", meta.String(parent.span_id))]
-    Error(Nil) -> []
-  }
-  list.append(parent, [
-    #("trace_id", meta.String(trace.trace_id)),
-    #("span_id", meta.String(trace.span_id)),
+  [
     #("method", meta.String(http.method_to_string(request.method))),
     #("path", meta.String(request.path)),
     #("route", meta.String(route)),
@@ -591,7 +588,7 @@ fn span_meta(
       Ok(bytes) -> #("bytes", meta.Int(bytes))
       Error(Nil) -> #("streamed", meta.Bool(True))
     },
-  ])
+  ]
 }
 
 fn ms(duration: Duration) -> Int {

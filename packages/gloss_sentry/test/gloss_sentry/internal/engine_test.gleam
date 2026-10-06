@@ -44,6 +44,8 @@ fn span_error(error: String) -> tracer.Event {
     meta: [#("task", meta.String("t"))],
     duration: duration.seconds(2),
     error: Some(error),
+    trace: trace(),
+    parent_span_id: None,
   )
 }
 
@@ -55,11 +57,20 @@ fn span_ok() -> tracer.Event {
     meta: [#("task", meta.String("t"))],
     duration: duration.seconds(1),
     error: None,
+    trace: trace(),
+    parent_span_id: None,
   )
 }
 
 fn point(level: tracer.Level, name: String) -> tracer.Event {
-  tracer.Point(source: "gloss.scheduler", name:, at: now(), meta: [], level:)
+  tracer.Point(
+    source: "gloss.scheduler",
+    name:,
+    at: now(),
+    meta: [],
+    level:,
+    trace: None,
+  )
 }
 
 fn feed(state: State, events: List(tracer.Event)) -> State {
@@ -84,6 +95,10 @@ pub fn failed_span_posts_and_ok_span_does_not_test() {
   |> should.equal("2026-10-06T12:00:02Z")
   at(payload(request), ["tags", "duration_ms"], decode.string)
   |> should.equal("2000")
+  at(payload(request), ["contexts", "trace", "trace_id"], decode.string)
+  |> should.equal("4bf92f3577b34da6a3ce929d0e0e4736")
+  at(payload(request), ["contexts", "trace", "span_id"], decode.string)
+  |> should.equal("00f067aa0ba902b7")
 
   let #(state, effects) = engine.handle(fresh(), Traced(span_ok()), now(), id)
   effects |> should.equal([])
@@ -235,4 +250,11 @@ pub fn captured_test() {
   |> should.equal("gloss_sentry")
   at(payload(request), ["extra", "order"], decode.string) |> should.equal("o-1")
   state.crumb_count |> should.equal(1)
+}
+
+fn trace() -> tracer.SpanContext {
+  tracer.SpanContext(
+    trace_id: "4bf92f3577b34da6a3ce929d0e0e4736",
+    span_id: "00f067aa0ba902b7",
+  )
 }

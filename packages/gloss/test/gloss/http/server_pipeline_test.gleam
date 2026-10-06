@@ -110,14 +110,14 @@ pub fn request_id_test() {
 pub fn trace_starts_or_continues_test() {
   let #(builder, events) = traced()
 
-  // A new trace: ids in the span, no parent.
+  // A new trace, with no parent.
   server.handle(builder, request(http.Get, "/notes/1"))
-  let assert [tracer.Span(meta: fresh, ..)] = drain(events)
-  let assert Ok(meta.String(trace_id)) = meta.get(fresh, "trace_id")
-  let assert Ok(meta.String(span_id)) = meta.get(fresh, "span_id")
-  string.length(trace_id) |> should.equal(32)
-  string.length(span_id) |> should.equal(16)
-  meta.get(fresh, "parent_span_id") |> should.equal(Error(Nil))
+  let assert [tracer.Span(trace:, parent_span_id: None, meta:, ..)] =
+    drain(events)
+  string.length(trace.trace_id) |> should.equal(32)
+  string.length(trace.span_id) |> should.equal(16)
+  // The ids are fields, not meta.
+  meta.get(meta, "trace_id") |> should.equal(Error(Nil))
 
   // An upstream trace is continued under a new span.
   let upstream = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
@@ -125,13 +125,10 @@ pub fn trace_starts_or_continues_test() {
     builder,
     request(http.Get, "/notes/1") |> request.set_header("traceparent", upstream),
   )
-  let assert [tracer.Span(meta: continued, ..)] = drain(events)
-  meta.get(continued, "trace_id")
-  |> should.equal(Ok(meta.String("4bf92f3577b34da6a3ce929d0e0e4736")))
-  meta.get(continued, "parent_span_id")
-  |> should.equal(Ok(meta.String("00f067aa0ba902b7")))
-  meta.get(continued, "span_id")
-  |> should.not_equal(Ok(meta.String("00f067aa0ba902b7")))
+  let assert [tracer.Span(trace:, parent_span_id:, ..)] = drain(events)
+  trace.trace_id |> should.equal("4bf92f3577b34da6a3ce929d0e0e4736")
+  parent_span_id |> should.equal(Some("00f067aa0ba902b7"))
+  trace.span_id |> should.not_equal("00f067aa0ba902b7")
 }
 
 pub fn server_middleware_wraps_unmatched_requests_test() {

@@ -6,7 +6,7 @@ import gleam/http.{Post}
 import gleam/http/request.{type Request}
 import gleam/json.{type Json}
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/string
 import gleam/time/calendar
 import gleam/time/timestamp.{type Timestamp}
@@ -74,7 +74,13 @@ pub type Event {
     /// Left out of the JSON when empty.
     release: String,
     server_name: String,
+    /// The span the event happened in, as `contexts.trace`.
+    trace: Option(Trace),
   )
+}
+
+pub type Trace {
+  Trace(trace_id: String, span_id: String, parent_span_id: Option(String))
 }
 
 pub fn rfc3339(at: Timestamp) -> String {
@@ -138,9 +144,26 @@ pub fn event_json(event: Event) -> Json {
         "" -> []
         release -> [#("release", json.string(release))]
       },
+      case event.trace {
+        Some(trace) -> [
+          #("contexts", json.object([#("trace", trace_json(trace))])),
+        ]
+        None -> []
+      },
       body_json(event.body),
     ]),
   )
+}
+
+fn trace_json(trace: Trace) -> Json {
+  json.object([
+    #("trace_id", json.string(trace.trace_id)),
+    #("span_id", json.string(trace.span_id)),
+    ..case trace.parent_span_id {
+      Some(parent) -> [#("parent_span_id", json.string(parent))]
+      None -> []
+    }
+  ])
 }
 
 fn body_json(body: Body) -> List(#(String, Json)) {

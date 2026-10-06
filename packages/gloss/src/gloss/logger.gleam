@@ -215,15 +215,25 @@ pub fn trace_handler(logger: Logger) -> tracer.Handler {
 /// separated by a space. A `Point` keeps its level, meta and time. A
 /// `Span` is stamped at its end, carries `duration_ms` after the event's
 /// meta, and is `Info` when it succeeded or `Error` with an `error` entry
-/// when it failed.
+/// when it failed. Both end with `trace_id` and `span_id` when they belong
+/// to a span, so log lines can be matched to traces.
 pub fn from_event(event: tracer.Event) -> Entry {
   let message = event.source <> " " <> event.name
 
   case event {
-    tracer.Point(at:, meta: event_meta, level:, ..) -> {
-      Entry(level: from_tracer_level(level), message:, meta: event_meta, at:)
+    tracer.Point(at:, meta: event_meta, level:, trace:, ..) -> {
+      let ids = case trace {
+        Some(trace) -> trace_meta(trace)
+        None -> []
+      }
+      Entry(
+        level: from_tracer_level(level),
+        message:,
+        meta: list.append(event_meta, ids),
+        at:,
+      )
     }
-    tracer.Span(at:, meta: event_meta, duration:, error:, ..) -> {
+    tracer.Span(at:, meta: event_meta, duration:, error:, trace:, ..) -> {
       let took = #("duration_ms", meta.Int(duration.to_milliseconds(duration)))
       let #(level, extra) = case error {
         None -> #(Info, [took])
@@ -232,11 +242,18 @@ pub fn from_event(event: tracer.Event) -> Entry {
       Entry(
         level:,
         message:,
-        meta: list.append(event_meta, extra),
+        meta: list.flatten([event_meta, extra, trace_meta(trace)]),
         at: timestamp.add(at, duration),
       )
     }
   }
+}
+
+fn trace_meta(trace: tracer.SpanContext) -> Meta {
+  [
+    #("trace_id", meta.String(trace.trace_id)),
+    #("span_id", meta.String(trace.span_id)),
+  ]
 }
 
 fn from_tracer_level(level: tracer.Level) -> Level {

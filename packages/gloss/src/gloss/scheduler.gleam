@@ -193,7 +193,14 @@ pub fn to_trace(event: Event) -> tracer.Event {
   let source = "gloss.scheduler"
   let task_meta = fn(task) { [#("task", meta.String(task))] }
   let point = fn(name, task, at, level) {
-    tracer.Point(source:, name:, at:, meta: task_meta(task), level:)
+    tracer.Point(
+      source:,
+      name:,
+      at:,
+      meta: task_meta(task),
+      level:,
+      trace: None,
+    )
   }
   let span = fn(name, task, at, took, error) {
     tracer.Span(
@@ -203,6 +210,8 @@ pub fn to_trace(event: Event) -> tracer.Event {
       meta: task_meta(task),
       duration: took,
       error:,
+      trace: tracer.root(),
+      parent_span_id: None,
     )
   }
   case event {

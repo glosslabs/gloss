@@ -119,6 +119,30 @@ pub fn otp_channel_does_not_crash_test() {
   log.debug("no meta", []) |> should.equal(Nil)
 }
 
+const span_context =
+  tracer.SpanContext(
+    trace_id: "4bf92f3577b34da6a3ce929d0e0e4736",
+    span_id: "00f067aa0ba902b7",
+  )
+
+const trace_meta = [
+  #("trace_id", meta.String("4bf92f3577b34da6a3ce929d0e0e4736")),
+  #("span_id", meta.String("00f067aa0ba902b7")),
+]
+
+pub fn from_event_point_in_a_span_test() {
+  let point =
+    tracer.Point(
+      source: "gloss.http",
+      name: "csrf.rejected",
+      at: utc(2026, 10, 6, 12, 0),
+      meta: [task],
+      level: tracer.Warning,
+      trace: Some(span_context),
+    )
+  logger.from_event(point).meta |> should.equal([task, ..trace_meta])
+}
+
 pub fn from_event_point_test() {
   let at = utc(2026, 10, 6, 12, 0)
   let point = fn(level) {
@@ -128,6 +152,7 @@ pub fn from_event_point_test() {
       at:,
       meta: [task],
       level:,
+      trace: None,
     )
   }
   logger.from_event(point(tracer.Warning))
@@ -158,20 +183,27 @@ pub fn from_event_span_test() {
       meta: [task],
       duration: took,
       error:,
+      trace: span_context,
+      parent_span_id: None,
     )
   }
   logger.from_event(span(None))
   |> should.equal(Entry(
     logger.Info,
     "gloss.scheduler task.finished",
-    [task, #("duration_ms", meta.Int(2000))],
+    [task, #("duration_ms", meta.Int(2000)), ..trace_meta],
     timestamp.add(at, took),
   ))
   logger.from_event(span(Some("boom")))
   |> should.equal(Entry(
     logger.Error,
     "gloss.scheduler task.finished",
-    [task, #("duration_ms", meta.Int(2000)), #("error", meta.String("boom"))],
+    [
+      task,
+      #("duration_ms", meta.Int(2000)),
+      #("error", meta.String("boom")),
+      ..trace_meta
+    ],
     timestamp.add(at, took),
   ))
 }

@@ -10,14 +10,14 @@
 //// |> request.set_header("traceparent", traceparent.header(ctx.trace))
 //// ```
 ////
-//// The ids also appear in the request span's meta as `trace_id`,
-//// `span_id` and, when the trace came from upstream, `parent_span_id`.
+//// The request span carries the same ids as its `trace`, and the upstream
+//// span as its `parent_span_id`.
 
-import gleam/bit_array
 import gleam/http/request
 import gleam/list
 import gleam/string
 import gloss/http/reply.{type Request}
+import gloss/tracer
 
 pub type TraceParent {
   TraceParent(
@@ -32,13 +32,20 @@ pub type TraceParent {
 
 /// A new trace, sampled.
 pub fn new() -> TraceParent {
-  TraceParent(trace_id: random_hex(16), span_id: random_hex(8), sampled: True)
+  let tracer.SpanContext(trace_id:, span_id:) = tracer.root()
+  TraceParent(trace_id:, span_id:, sampled: True)
 }
 
 /// A new span in the same trace, e.g. for each request in a trace that
 /// arrived from upstream.
 pub fn child(parent: TraceParent) -> TraceParent {
-  TraceParent(..parent, span_id: random_hex(8))
+  let context = tracer.child(span_context(parent))
+  TraceParent(..parent, span_id: context.span_id)
+}
+
+/// The trace and span ids, for tracer events.
+pub fn span_context(trace: TraceParent) -> tracer.SpanContext {
+  tracer.SpanContext(trace_id: trace.trace_id, span_id: trace.span_id)
 }
 
 /// The trace named by the request's `traceparent` header.
@@ -95,10 +102,3 @@ fn sampled_flag(flags: String) -> Bool {
     Error(Nil) -> False
   }
 }
-
-fn random_hex(bytes: Int) -> String {
-  strong_rand_bytes(bytes) |> bit_array.base16_encode |> string.lowercase
-}
-
-@external(erlang, "crypto", "strong_rand_bytes")
-fn strong_rand_bytes(n: Int) -> BitArray

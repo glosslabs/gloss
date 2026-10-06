@@ -1,6 +1,7 @@
 import gleam/erlang/process
 import gleam/option.{None}
 import gleam/order
+import gleam/string
 import gleam/time/duration
 import gleeunit/should
 import gloss/meta
@@ -14,6 +15,7 @@ fn sample() -> tracer.Event {
     at: utc(2026, 10, 6, 12, 0),
     meta: [],
     level: tracer.Info,
+    trace: None,
   )
 }
 
@@ -69,11 +71,23 @@ pub fn span_times_work_and_returns_result_when_enabled_test() {
       meta: [#("k", meta.Bool(True))],
       duration:,
       error: None,
+      trace:,
+      parent_span_id: None,
       ..,
     ),
   ] = drain(seen)
   duration.compare(duration, duration.milliseconds(10))
   |> should.not_equal(order.Lt)
+  string.length(trace.trace_id) |> should.equal(32)
+  string.length(trace.span_id) |> should.equal(16)
+}
+
+pub fn root_and_child_test() {
+  let root = tracer.root()
+  let child = tracer.child(root)
+  child.trace_id |> should.equal(root.trace_id)
+  child.span_id |> should.not_equal(root.span_id)
+  tracer.root().trace_id |> should.not_equal(root.trace_id)
 }
 
 pub fn handlers_run_in_order_and_are_immutable_test() {
