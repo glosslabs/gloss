@@ -35,7 +35,6 @@ knows nothing of HTTP or HTML; `server/` depends on it, never the reverse.
 | `server/routes` | The route table, and nothing else |
 | `server/handlers/*` | One module per area: accounts, threads, profile, users |
 | `server/middleware/current_user` | The signed-in user from the session |
-| `server/uploads` | Avatar uploads streamed straight to disk |
 | `server/views/*` | Lustre views rendered to HTML |
 
 ## What it exercises
@@ -44,8 +43,8 @@ knows nothing of HTTP or HTML; `server/` depends on it, never the reverse.
   successful posts redirected with `303`.
 - Server-side sessions (`gloss/http/session`), regenerated at sign-in.
 - CSRF protection (`gloss/http/csrf`).
-- Avatar uploads streamed with `gloss/http/multipart`, checked for type
-  (`415`) and size (`413`) as they arrive.
+- Avatar uploads saved by `gloss/http/upload`, streamed straight to disk
+  and checked for type (`415`) and size (`413`) as they arrive.
 - Static files for CSS and avatars (`gloss/http/static`), and gzip
   (`gloss/http/compress`).
 - Query parameters for paging (`gloss/http/query`).
