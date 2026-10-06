@@ -5,11 +5,10 @@ import gleeunit/should
 import gloss/http/reply
 import gloss/http/router
 import gloss/http/server
-import gloss/internal/http_reply_render as reply_render
 import http_support.{header, rendered_body, request}
 
 fn render(res: reply.Response, accept: String) {
-  reply_render.render(res, Ok(accept), reply.default_error_page)
+  http_support.render(res, Ok(accept))
 }
 
 pub fn problem_as_json_test() {

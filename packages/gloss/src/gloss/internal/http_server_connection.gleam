@@ -6,21 +6,22 @@
 //// middle of a request finishes it, answers with `connection: close`, and
 //// closes.
 
-import gleam/bytes_tree.{type BytesTree}
+import gleam/bytes_tree
 import gleam/http
 import gleam/http/response.{type Response}
 import gleam/list
 import gloss/http/reply.{type Request}
+import gloss/internal/http_reply_render.{type Wire, SendFile, Sized}
 import gloss/internal/http_server_http1.{type Head, Head} as http1
 import gloss/internal/http_server_tcp.{type Socket} as tcp
 
 pub type Settings {
   Settings(
     /// Serve a request, returning the response ready to send.
-    handler: fn(Request) -> Response(BytesTree),
+    handler: fn(Request) -> Response(Wire),
     /// Render a response the connection itself produced, for a request
     /// with this `Accept` header.
-    render: fn(reply.Response, Result(String, Nil)) -> Response(BytesTree),
+    render: fn(reply.Response, Result(String, Nil)) -> Response(Wire),
     max_body: Int,
     /// Milliseconds allowed for each header line and the body once a
     /// request has started.
@@ -151,16 +152,40 @@ fn respond(
   // A drain requested while the handler ran is still waiting in the mailbox.
   let draining = draining || tcp.drain_requested()
   let keep_alive = !draining && http1.keep_alive(head)
-  let wire =
-    http1.encode(
-      response,
-      keep_alive:,
-      head_request: head.method == http.Head,
-      date: tcp.http_date(),
-    )
-  case tcp.send(socket, wire), keep_alive {
+  case
+    write(socket, response, keep_alive, head.method == http.Head),
+    keep_alive
+  {
     Ok(Nil), True -> await_request(socket, settings)
     _, _ -> tcp.close(socket)
+  }
+}
+
+fn write(
+  socket: Socket,
+  response: Response(Wire),
+  keep_alive: Bool,
+  head_request: Bool,
+) -> Result(Nil, Nil) {
+  let date = tcp.http_date()
+  case response.body {
+    Sized(tree) ->
+      tcp.send(
+        socket,
+        http1.encode(
+          response.set_body(response, tree),
+          keep_alive:,
+          head_request:,
+          date:,
+        ),
+      )
+    SendFile(path:, offset:, length:) -> {
+      let head = http1.head(response, length:, keep_alive:, date:)
+      case tcp.send(socket, head), head_request {
+        Ok(Nil), False -> tcp.sendfile(socket, path, offset, length)
+        result, _ -> result
+      }
+    }
   }
 }
 
@@ -173,14 +198,8 @@ fn reject(
   problem: Problem,
 ) -> Nil {
   settings.report(problem)
-  let wire =
-    http1.encode(
-      settings.render(reply.error(status, message(problem)), accept),
-      keep_alive: False,
-      head_request: False,
-      date: tcp.http_date(),
-    )
-  let _ = tcp.send(socket, wire)
+  let response = settings.render(reply.error(status, message(problem)), accept)
+  let _ = write(socket, response, False, False)
   tcp.close(socket)
 }
 

@@ -57,6 +57,16 @@ pub fn close(socket: Socket) -> Nil
 @external(erlang, "gloss@http@server_ffi", "send")
 pub fn send(socket: Socket, data: BytesTree) -> Result(Nil, Nil)
 
+/// Send `length` bytes of the file at `path` from `offset` straight from
+/// the operating system.
+@external(erlang, "gloss@http@server_ffi", "sendfile")
+pub fn sendfile(
+  socket: Socket,
+  path: String,
+  offset: Int,
+  length: Int,
+) -> Result(Nil, Nil)
+
 @external(erlang, "gloss@http@server_ffi", "next")
 pub fn next(socket: Socket, timeout: Int) -> Event
 

@@ -45,6 +45,10 @@ pub type Body {
   Empty
   /// An error, rendered by the server in the format the client accepts.
   Problem(message: String, details: List(String))
+  /// `length` bytes of the file at `path` from `offset`, sent by the
+  /// operating system without reading them into memory. See
+  /// `gloss/http/static`.
+  File(path: String, offset: Int, length: Int)
 }
 
 /// A JSON body with `content-type: application/json`.

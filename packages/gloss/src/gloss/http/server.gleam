@@ -65,7 +65,7 @@ import gleam/time/timestamp
 import gloss/http/context.{type Handler, type Middleware, Context}
 import gloss/http/reply.{type ErrorPage, type Request}
 import gloss/http/router.{type RouteError, type Router}
-import gloss/internal/http_reply_render as reply_render
+import gloss/internal/http_reply_render.{type Wire} as reply_render
 import gloss/internal/http_server_connection as connection
 import gloss/internal/http_server_control as control
 import gloss/logger.{type Logger}
@@ -412,21 +412,39 @@ fn report_problem(tracer: Tracer, problem: connection.Problem) -> Nil {
 /// res.status |> should.equal(200)
 /// ```
 ///
-/// Panics when the router has duplicate routes or names.
+/// File bodies are read into memory. Panics when the router has duplicate
+/// routes.
 pub fn handle(
   builder: Builder(state),
   request: Request,
 ) -> Response(BytesTree) {
   case router.table(builder.router) {
-    Ok(table) -> pipeline(builder, table)(request)
+    Ok(table) -> {
+      let response = pipeline(builder, table)(request)
+      response.set_body(response, materialise(response.body))
+    }
     Error(errors) -> panic as { "invalid routes: " <> string.inspect(errors) }
   }
 }
 
+fn materialise(wire: Wire) -> BytesTree {
+  case wire {
+    reply_render.Sized(tree) -> tree
+    reply_render.SendFile(path:, offset:, length:) ->
+      case read_range(path, offset, length) {
+        Ok(data) -> bytes_tree.from_bit_array(data)
+        Error(Nil) -> bytes_tree.new()
+      }
+  }
+}
+
+@external(erlang, "gloss@http@server_ffi", "read_range")
+fn read_range(path: String, offset: Int, length: Int) -> Result(BitArray, Nil)
+
 fn pipeline(
   builder: Builder(state),
   table: router.Table(state),
-) -> fn(Request) -> Response(BytesTree) {
+) -> fn(Request) -> Response(Wire) {
   let Builder(state:, logger: log, tracer: trace, middleware:, error_page:, ..) =
     builder
   fn(request: Request) {
@@ -519,7 +537,7 @@ fn span_name(method: http.Method, route: String) -> String {
 fn span_meta(
   request: Request,
   route: String,
-  response: Response(BytesTree),
+  response: Response(Wire),
   request_id: String,
 ) -> meta.Meta {
   [
@@ -528,7 +546,7 @@ fn span_meta(
     #("route", meta.String(route)),
     #("status", meta.Int(response.status)),
     #("request_id", meta.String(request_id)),
-    #("bytes", meta.Int(bytes_tree.byte_size(response.body))),
+    #("bytes", meta.Int(reply_render.length(response.body))),
   ]
 }
 

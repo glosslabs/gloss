@@ -1,6 +1,7 @@
 -module(gloss@http@server_ffi).
 
 -export([listen/3, port/1, accept/1, controlling_process/2, close/1, send/2,
+         sendfile/4, read_range/3, file_info/1, priv_dir/1,
          next/2, read_body/3, drain_requested/0, request_drain/1, await_go/0,
          go/1, rescue/1, random_id/0, http_date/0]).
 
@@ -49,6 +50,50 @@ send(Socket, Data) ->
     case gen_tcp:send(Socket, Data) of
         ok -> {ok, nil};
         {error, _} -> {error, nil}
+    end.
+
+%% sendfile/5 takes an open raw file, not a file name.
+sendfile(Socket, Path, Offset, Length) ->
+    case file:open(Path, [read, raw, binary]) of
+        {ok, File} ->
+            Result = file:sendfile(File, Socket, Offset, Length, []),
+            _ = file:close(File),
+            case Result of
+                {ok, Length} -> {ok, nil};
+                _ -> {error, nil}
+            end;
+        {error, _} -> {error, nil}
+    end.
+
+%% Read part of a file into memory, for server.handle in tests.
+read_range(Path, Offset, Length) ->
+    case file:open(Path, [read, raw, binary]) of
+        {ok, Device} ->
+            Result = file:pread(Device, Offset, Length),
+            _ = file:close(Device),
+            case Result of
+                {ok, Data} -> {ok, Data};
+                eof -> {ok, <<>>};
+                {error, _} -> {error, nil}
+            end;
+        {error, _} -> {error, nil}
+    end.
+
+%% {ok, {Size, MtimeSeconds}} for a regular file; {error, nil} for
+%% anything else, including directories and missing paths.
+file_info(Path) ->
+    case file:read_file_info(Path, [{time, posix}]) of
+        {ok, Info} when element(3, Info) =:= regular ->
+            {ok, {element(2, Info), element(6, Info)}};
+        _ -> {error, nil}
+    end.
+
+priv_dir(Name) ->
+    try code:priv_dir(binary_to_existing_atom(Name)) of
+        {error, _} -> {error, nil};
+        Dir -> {ok, unicode:characters_to_binary(Dir)}
+    catch
+        error:badarg -> {error, nil}
     end.
 
 %% Wait for the next request-line or header packet, a drain request, or the

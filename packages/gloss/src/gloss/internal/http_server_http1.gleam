@@ -122,7 +122,27 @@ pub fn encode(
   head_request head_request: Bool,
   date date: String,
 ) -> BytesTree {
-  let length = bytes_tree.byte_size(response.body)
+  let head =
+    head(
+      response,
+      length: bytes_tree.byte_size(response.body),
+      keep_alive:,
+      date:,
+    )
+  case head_request {
+    True -> head
+    False -> bytes_tree.append_tree(head, response.body)
+  }
+}
+
+/// The status line and headers for a body of `length` bytes sent
+/// separately.
+pub fn head(
+  response: Response(a),
+  length length: Int,
+  keep_alive keep_alive: Bool,
+  date date: String,
+) -> BytesTree {
   let headers =
     response.headers
     |> list.filter(fn(header) {
@@ -137,19 +157,14 @@ pub fn encode(
     }),
     ..headers
   ]
-  let head =
-    list.fold(
-      headers,
-      bytes_tree.from_string(status_line(response.status)),
-      fn(tree, header) {
-        bytes_tree.append_string(tree, header.0 <> ": " <> header.1 <> "\r\n")
-      },
-    )
-    |> bytes_tree.append_string("\r\n")
-  case head_request {
-    True -> head
-    False -> bytes_tree.append_tree(head, response.body)
-  }
+  list.fold(
+    headers,
+    bytes_tree.from_string(status_line(response.status)),
+    fn(tree, header) {
+      bytes_tree.append_string(tree, header.0 <> ": " <> header.1 <> "\r\n")
+    },
+  )
+  |> bytes_tree.append_string("\r\n")
 }
 
 pub const continue = "HTTP/1.1 100 Continue\r\n\r\n"

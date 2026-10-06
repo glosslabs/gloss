@@ -1,5 +1,5 @@
-//// Turning a `reply.Response` into bytes for the wire, rendering `Problem`
-//// bodies in the format the client accepts.
+//// Turning a `reply.Response` into what the connection sends, rendering
+//// `Problem` bodies in the format the client accepts.
 
 import gleam/bytes_tree.{type BytesTree}
 import gleam/http/response.{type Response}
@@ -17,12 +17,27 @@ const problem_types = [
   "text/plain",
 ]
 
+/// A response body ready for the connection.
+pub type Wire {
+  Sized(BytesTree)
+  SendFile(path: String, offset: Int, length: Int)
+}
+
+pub fn length(wire: Wire) -> Int {
+  case wire {
+    Sized(tree) -> bytes_tree.byte_size(tree)
+    SendFile(length:, ..) -> length
+  }
+}
+
 pub fn render(
   res: reply.Response,
   accept: Result(String, Nil),
   error_page: fn(ErrorPage) -> String,
-) -> Response(BytesTree) {
+) -> Response(Wire) {
   case res.body {
+    reply.File(path:, offset:, length:) ->
+      response.set_body(res, SendFile(path:, offset:, length:))
     reply.Json(body) ->
       bytes(res, json.to_string_tree(body) |> bytes_tree.from_string_tree)
     reply.Text(body) -> bytes(res, bytes_tree.from_string(body))
@@ -42,8 +57,8 @@ pub fn render(
   }
 }
 
-fn bytes(res: reply.Response, body: BytesTree) -> Response(BytesTree) {
-  response.set_body(res, body)
+fn bytes(res: reply.Response, body: BytesTree) -> Response(Wire) {
+  response.set_body(res, Sized(body))
 }
 
 fn problem_body(

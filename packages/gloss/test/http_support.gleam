@@ -50,7 +50,18 @@ pub fn trail(label: String) -> Middleware(state) {
 /// The body as the server would send it to a client with no `Accept`
 /// header.
 pub fn body(res: Response) -> String {
-  rendered_body(reply_render.render(res, Error(Nil), reply.default_error_page))
+  rendered_body(render(res, Error(Nil)))
+}
+
+/// A response as the server would send it for this `Accept` header. Only
+/// for bodies held in memory.
+pub fn render(
+  res: Response,
+  accept: Result(String, Nil),
+) -> response.Response(BytesTree) {
+  let rendered = reply_render.render(res, accept, reply.default_error_page)
+  let assert reply_render.Sized(tree) = rendered.body
+  response.set_body(rendered, tree)
 }
 
 pub fn rendered_body(res: response.Response(BytesTree)) -> String {
