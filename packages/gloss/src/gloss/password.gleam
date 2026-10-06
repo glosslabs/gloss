@@ -14,6 +14,7 @@
 //// still verify.
 
 import gleam/bit_array
+import gleam/crypto
 import gleam/int
 import gleam/string
 
@@ -21,7 +22,7 @@ const iterations = 100_000
 
 /// A salted hash of `password`, safe to store.
 pub fn hash(password: String) -> String {
-  let salt = random_bytes(16)
+  let salt = crypto.strong_random_bytes(16)
   encode(iterations, salt, stretch(password, salt, iterations))
 }
 
@@ -35,7 +36,7 @@ pub fn verify(password: String, stored: String) -> Bool {
         bit_array.base64_decode(expected)
       {
         Ok(rounds), Ok(salt), Ok(expected) if rounds > 0 ->
-          hash_equals(stretch(password, salt, rounds), expected)
+          crypto.secure_compare(stretch(password, salt, rounds), expected)
         _, _, _ -> False
       }
     _ -> False
@@ -57,9 +58,3 @@ fn encode(rounds: Int, salt: BitArray, derived: BitArray) -> String {
 
 @external(erlang, "gloss@password_ffi", "pbkdf2")
 fn pbkdf2(password: BitArray, salt: BitArray, iterations: Int) -> BitArray
-
-@external(erlang, "gloss@password_ffi", "random_bytes")
-fn random_bytes(n: Int) -> BitArray
-
-@external(erlang, "gloss@password_ffi", "hash_equals")
-fn hash_equals(a: BitArray, b: BitArray) -> Bool

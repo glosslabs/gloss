@@ -23,6 +23,7 @@
 //// partial file is deleted. Other fields in the form are skipped.
 
 import gleam/bit_array
+import gleam/crypto
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -209,13 +210,12 @@ fn extension(content_type: String) -> String {
 }
 
 fn random_name() -> String {
-  strong_rand_bytes(8) |> bit_array.base16_encode |> string.lowercase
+  crypto.strong_random_bytes(8)
+  |> bit_array.base16_encode
+  |> string.lowercase
 }
 
 type Device
-
-@external(erlang, "crypto", "strong_rand_bytes")
-fn strong_rand_bytes(n: Int) -> BitArray
 
 @external(erlang, "gloss@http@server_ffi", "upload_open")
 fn open(path: String) -> Result(Device, Nil)

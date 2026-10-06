@@ -26,7 +26,9 @@
 //// so an id known before login can't be used after it.
 
 import gleam/bit_array
+import gleam/crypto
 import gleam/dict.{type Dict}
+import gleam/float
 import gleam/option.{type Option, None, Some}
 import gleam/time/duration.{type Duration}
 import gleam/time/timestamp.{type Timestamp}
@@ -158,16 +160,10 @@ pub fn destroy(session: Session, res: Response) -> Response {
 
 fn attributes(session: Session) -> Attributes {
   let seconds = duration.to_seconds(session.sessions.ttl)
-  cookie.max_age(session.sessions.attributes, Some(float_to_int(seconds)))
+  cookie.max_age(session.sessions.attributes, Some(float.truncate(seconds)))
 }
 
 /// 32 random bytes, base64url without padding: safe in a cookie.
 fn new_id() -> String {
-  random_bytes(32) |> bit_array.base64_url_encode(False)
+  crypto.strong_random_bytes(32) |> bit_array.base64_url_encode(False)
 }
-
-@external(erlang, "crypto", "strong_rand_bytes")
-fn random_bytes(n: Int) -> BitArray
-
-@external(erlang, "erlang", "trunc")
-fn float_to_int(f: Float) -> Int

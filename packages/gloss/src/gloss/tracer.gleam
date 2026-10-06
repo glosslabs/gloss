@@ -38,6 +38,7 @@
 //// `meta` the attributes, and `trace` the span it happened in, if any.
 
 import gleam/bit_array
+import gleam/crypto
 import gleam/erlang/atom.{type Atom}
 import gleam/list
 import gleam/option.{type Option, None}
@@ -106,11 +107,10 @@ pub fn child(parent: SpanContext) -> SpanContext {
 }
 
 fn random_hex(bytes: Int) -> String {
-  strong_rand_bytes(bytes) |> bit_array.base16_encode |> string.lowercase
+  crypto.strong_random_bytes(bytes)
+  |> bit_array.base16_encode
+  |> string.lowercase
 }
-
-@external(erlang, "crypto", "strong_rand_bytes")
-fn strong_rand_bytes(n: Int) -> BitArray
 
 pub type Level {
   Debug

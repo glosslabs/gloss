@@ -36,6 +36,7 @@
 //// restarts.
 
 import gleam/bit_array
+import gleam/crypto
 import gleam/erlang/atom
 import gleam/erlang/node
 import gleam/erlang/process.{type Monitor, type Name, type Pid, type Subject}
@@ -299,9 +300,6 @@ fn perform(shell: Shell, effect: engine.Effect) -> Shell {
 @external(erlang, "gloss_sentry_ffi", "try_send")
 fn try_send(subject: Subject(Message), message: Message) -> Nil
 
-@external(erlang, "crypto", "strong_rand_bytes")
-fn random_bytes(n: Int) -> BitArray
-
 /// A uuid4 as 32 lowercase hex characters.
 fn event_id() -> String {
   let assert <<
@@ -310,7 +308,7 @@ fn event_id() -> String {
     b:bits-size(12),
     _:size(2),
     c:bits-size(62),
-  >> = random_bytes(16)
+  >> = crypto.strong_random_bytes(16)
   <<a:bits, 4:size(4), b:bits, 2:size(2), c:bits>>
   |> bit_array.base16_encode
   |> string.lowercase

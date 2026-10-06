@@ -2,6 +2,7 @@
 //// encoding what the server sends, and the opening handshake's key.
 
 import gleam/bit_array
+import gleam/crypto
 import gleam/int
 
 pub type Opcode {
@@ -131,7 +132,7 @@ const guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 /// The `sec-websocket-accept` answer to a client's `sec-websocket-key`.
 pub fn accept_key(key: String) -> String {
-  sha1(bit_array.from_string(key <> guid))
+  crypto.hash(crypto.Sha1, bit_array.from_string(key <> guid))
   |> bit_array.base64_encode(True)
 }
 
@@ -144,9 +145,6 @@ fn result_try(
     Error(error) -> Error(error)
   }
 }
-
-@external(erlang, "gloss@http@server_ffi", "sha1")
-fn sha1(data: BitArray) -> BitArray
 
 @external(erlang, "gloss@http@server_ffi", "unmask")
 fn unmask(key: BitArray, payload: BitArray) -> BitArray

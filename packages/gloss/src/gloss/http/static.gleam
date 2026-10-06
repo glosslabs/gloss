@@ -31,6 +31,7 @@
 
 import gleam/bit_array
 import gleam/bytes_tree
+import gleam/crypto
 import gleam/http/request
 import gleam/http/response
 import gleam/int
@@ -356,11 +357,10 @@ fn multipart(
 }
 
 fn random_boundary() -> String {
-  strong_rand_bytes(12) |> bit_array.base16_encode |> string.lowercase
+  crypto.strong_random_bytes(12)
+  |> bit_array.base16_encode
+  |> string.lowercase
 }
-
-@external(erlang, "crypto", "strong_rand_bytes")
-fn strong_rand_bytes(n: Int) -> BitArray
 
 /// The wildcard's value as a relative path, or `Error` if it could leave
 /// the directory or names a dotfile.

@@ -326,9 +326,6 @@ type Inflated {
   InflateFailed
 }
 
-@external(erlang, "erlang", "spawn_monitor")
-fn spawn_monitor(run: fn() -> a) -> #(process.Pid, process.Monitor)
-
 @external(erlang, "gloss@http@server_ffi", "inflate_open")
 fn inflate_open() -> Inflater
 
@@ -451,12 +448,14 @@ fn run_handler(
   let progress = process.new_subject()
   let handler = settings.handler
   let peer = settings.peer
-  let #(pid, monitor) =
-    spawn_monitor(fn() {
+  let pid =
+    process.spawn_unlinked(fn() {
       request_body.watch(progress)
       let response = handler(request, peer)
       process.send(done, #(response, request_body.status()))
     })
+  // A handler that has already exited still produces a `DOWN` message.
+  let monitor = process.monitor(pid)
   let selector =
     process.new_selector()
     |> process.select_map(done, Finished)

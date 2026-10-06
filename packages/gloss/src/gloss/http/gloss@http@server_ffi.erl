@@ -2,7 +2,7 @@
 
 -export([listen/3, port/1, accept/1, controlling_process/2, close/1, send/2,
          sendfile/4, read_range/3, file_info/1, priv_dir/1, read_line/2,
-         sha1/1, unmask/2, arm_raw/1, is_drain/1, http_date/1, pdict_get/1,
+         unmask/2, arm_raw/1, is_drain/1, http_date/1, pdict_get/1,
          gzip/1, gzip_open/0, gzip_chunk/2, gzip_finish/1,
          inflate_open/0, inflate/2, inflate_continue/1, inflate_end/1,
          peer_address/1, ip_bytes/1, find/2,
@@ -145,8 +145,6 @@ target({scheme, _, Rest}) -> to_binary(Rest);
 target(Other) -> to_binary(Other).
 
 %% --- WebSockets -------------------------------------------------------------
-
-sha1(Data) -> crypto:hash(sha, Data).
 
 %% Switch an upgraded socket to raw packets and deliver the next data as a
 %% {tcp, Socket, Data} message.
