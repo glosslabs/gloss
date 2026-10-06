@@ -27,7 +27,7 @@ knows nothing of HTTP or HTML; `server/` depends on it, never the reverse.
 | `app` | `main`: composes config, reporters, the domain services and the server |
 | `app/config`, `app/reporters` | Settings from the environment; where logs and traces go |
 | `domain/accounts` | Registration, sign-in, profiles and avatars |
-| `domain/accounts/user`, `domain/accounts/password` | User rules; PBKDF2 password hashing |
+| `domain/accounts/user` | User rules; passwords are hashed with `gloss/password` |
 | `domain/forum` | Threads and replies |
 | `domain/forum/thread` | Thread and post rules |
 | `server` | The HTTP server: routes, CSRF protection, compression, error pages |

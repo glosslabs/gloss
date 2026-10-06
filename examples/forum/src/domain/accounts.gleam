@@ -1,6 +1,5 @@
 //// User accounts: registration, sign-in and profiles, kept in memory.
 
-import domain/accounts/password
 import domain/accounts/user.{
   type ProfileError, type RegisterError, type User, User,
 }
@@ -11,6 +10,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 import gleam/time/timestamp
+import gloss/password
 
 pub opaque type Accounts {
   Accounts(subject: Subject(Message))
@@ -42,11 +42,11 @@ pub fn start() -> Result(Accounts, actor.StartError) {
 pub fn register(
   accounts: Accounts,
   email: String,
-  password: String,
+  plain: String,
 ) -> Result(User, RegisterError) {
   use email <- result.try(user.email(email))
-  use password <- result.try(user.password(password))
-  let hash = password.hash(password)
+  use plain <- result.try(user.password(plain))
+  let hash = password.hash(plain)
   process.call(accounts.subject, 5000, Insert(email, hash, _))
 }
 
@@ -54,7 +54,7 @@ pub fn register(
 pub fn authenticate(
   accounts: Accounts,
   email: String,
-  password: String,
+  plain: String,
 ) -> Result(User, Nil) {
   let found = case user.email(email) {
     Ok(email) -> process.call(accounts.subject, 5000, FindByEmail(email, _))
@@ -62,13 +62,13 @@ pub fn authenticate(
   }
   case found {
     Ok(user) ->
-      case password.verify(password, user.password_hash) {
+      case password.verify(plain, user.password_hash) {
         True -> Ok(user)
         False -> Error(Nil)
       }
     Error(Nil) -> {
       // Take as long as a real check, so timing doesn't reveal accounts.
-      let _ = password.verify(password, decoy)
+      let _ = password.verify(plain, decoy)
       Error(Nil)
     }
   }

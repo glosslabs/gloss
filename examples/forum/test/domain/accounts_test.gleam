@@ -1,5 +1,4 @@
 import domain/accounts
-import domain/accounts/password
 import domain/accounts/user
 import gleam/option.{None, Some}
 import gleeunit/should
@@ -14,15 +13,6 @@ pub fn email_rules_test() {
 pub fn profile_rules_test() {
   user.profile("  Ada ", " hi ") |> should.equal(Ok(#("Ada", "hi")))
   user.profile(" ", "") |> should.equal(Error(user.DisplayNameMissing))
-}
-
-pub fn password_hash_test() {
-  let stored = password.hash("correct horse")
-  password.verify("correct horse", stored) |> should.be_true
-  password.verify("wrong horse", stored) |> should.be_false
-  password.verify("correct horse", "garbage") |> should.be_false
-  // Salted: the same password hashes differently each time.
-  should.not_equal(stored, password.hash("correct horse"))
 }
 
 pub fn register_and_authenticate_test() {
