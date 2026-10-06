@@ -4,6 +4,7 @@
          sendfile/4, read_range/3, file_info/1, priv_dir/1, read_line/2,
          sha1/1, unmask/2, arm_raw/1, is_drain/1, http_date/1, pdict_get/1,
          gzip/1, gzip_open/0, gzip_chunk/2, gzip_finish/1,
+         inflate_open/0, inflate/2, inflate_continue/1, inflate_end/1,
          next/2, read_body/3, drain_requested/0, request_drain/1, await_go/0,
          go/1, rescue/1, http_date/0]).
 
@@ -284,3 +285,35 @@ gzip_finish(Z) ->
     _ = zlib:deflateEnd(Z),
     _ = zlib:close(Z),
     Last.
+
+%% A streaming gzip decompressor for request bodies.
+inflate_open() ->
+    Z = zlib:open(),
+    ok = zlib:inflateInit(Z, 31),
+    Z.
+
+%% Inflate a bounded amount: {more, Out} when there is more output from the
+%% input given so far (call inflate_continue), {done, Out} once the input is
+%% used up, or inflate_failed for corrupt data.
+inflate(Z, Data) -> inflate_step(fun() -> zlib:safeInflate(Z, Data) end).
+
+inflate_continue(Z) -> inflate_step(fun() -> zlib:safeInflate(Z, []) end).
+
+inflate_step(Step) ->
+    try Step() of
+        {continue, Out} -> {more, iolist_to_binary(Out)};
+        {finished, Out} -> {done, iolist_to_binary(Out)};
+        _ -> inflate_failed
+    catch
+        _:_ -> inflate_failed
+    end.
+
+%% Close, reporting whether the compressed stream was complete.
+inflate_end(Z) ->
+    Result = try zlib:inflateEnd(Z) of
+        ok -> {ok, nil}
+    catch
+        _:_ -> {error, nil}
+    end,
+    _ = zlib:close(Z),
+    Result.

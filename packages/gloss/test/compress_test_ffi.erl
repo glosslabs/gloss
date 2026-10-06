@@ -1,5 +1,5 @@
 -module(compress_test_ffi).
--export([gunzip/1, first_chunk_text/2]).
+-export([gunzip/1, gzip/1, first_chunk_text/2]).
 
 gunzip(Data) ->
     try {ok, zlib:gunzip(Data)} catch _:_ -> {error, nil} end.
@@ -27,3 +27,5 @@ skip_headers(S) ->
         {ok, http_eoh} -> ok;
         {ok, _} -> skip_headers(S)
     end.
+
+gzip(Data) -> zlib:gzip(Data).

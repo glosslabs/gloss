@@ -13,6 +13,7 @@ import gleam/http/response.{type Response}
 import gleam/int
 import gleam/list
 import gleam/result
+import gleam/string
 import gloss/http/reply.{type Request}
 import gloss/internal/http_reply_render.{
   type Wire, SendFile, SendSegments, Sized, Stream, Upgraded,
@@ -152,6 +153,7 @@ fn network_body(
       _, _ -> Nil
     }
   }
+  let compressed = encoding(head) != Identity
   RequestBody(
     read: fn() {
       case request_body.status(), framing {
@@ -159,7 +161,7 @@ fn network_body(
         request_body.Streamed, _ | request_body.Broken, _ ->
           Error(request_body.Consumed)
         request_body.Unread, http1.Length(length)
-          if length > settings.max_body
+          if length > settings.max_body && !compressed
         -> {
           request_body.set_status(request_body.Broken)
           Error(request_body.TooLarge(settings.max_body))
@@ -167,13 +169,20 @@ fn network_body(
         request_body.Unread, _ -> {
           start()
           let read =
-            fold(socket, settings, framing, #([], 0), fn(acc, chunk) {
-              let size = acc.1 + bit_array.byte_size(chunk)
-              case size > settings.max_body {
-                True -> Error(request_body.TooLarge(settings.max_body))
-                False -> Ok(#([chunk, ..acc.0], size))
-              }
-            })
+            fold_decoded(
+              socket,
+              settings,
+              head,
+              framing,
+              #([], 0),
+              fn(acc, chunk) {
+                let size = acc.1 + bit_array.byte_size(chunk)
+                case size > settings.max_body {
+                  True -> Error(request_body.TooLarge(settings.max_body))
+                  False -> Ok(#([chunk, ..acc.0], size))
+                }
+              },
+            )
           case read {
             Ok(#(chunks, _)) -> {
               let bits = bit_array.concat(list.reverse(chunks))
@@ -197,7 +206,7 @@ fn network_body(
         request_body.Unread -> {
           start()
           let streamed =
-            fold(socket, settings, framing, 0, fn(total, chunk) {
+            fold_decoded(socket, settings, head, framing, 0, fn(total, chunk) {
               case consume(chunk) {
                 True -> Ok(total + bit_array.byte_size(chunk))
                 False -> Error(request_body.Stopped)
@@ -218,6 +227,103 @@ fn continue(socket: Socket) -> Nil {
   let _ = tcp.send(socket, bytes_tree.from_string(http1.continue))
   Nil
 }
+
+type Encoding {
+  Identity
+  Gzip
+  Unsupported(String)
+}
+
+fn encoding(head: Head) -> Encoding {
+  let codings =
+    head.headers
+    |> list.filter(fn(header) { header.0 == "content-encoding" })
+    |> list.flat_map(fn(header) { string.split(header.1, ",") })
+    |> list.map(fn(coding) { string.lowercase(string.trim(coding)) })
+    |> list.filter(fn(coding) { coding != "" && coding != "identity" })
+  case codings {
+    [] -> Identity
+    ["gzip"] | ["x-gzip"] -> Gzip
+    _ -> Unsupported(string.join(codings, ", "))
+  }
+}
+
+/// Read the body, inflating it first when it is gzipped.
+fn fold_decoded(
+  socket: Socket,
+  settings: Settings,
+  head: Head,
+  framing: http1.BodyFraming,
+  acc: acc,
+  f: fn(acc, BitArray) -> Result(acc, BodyError),
+) -> Result(acc, BodyError) {
+  case encoding(head), framing {
+    Identity, _ | Gzip, http1.Length(0) ->
+      fold(socket, settings, framing, acc, f)
+    Unsupported(coding), _ -> Error(request_body.UnsupportedEncoding(coding))
+    Gzip, _ -> {
+      let z = inflate_open()
+      let read =
+        fold(socket, settings, framing, acc, fn(acc, piece) {
+          inflated(z, inflate(z, piece), acc, f)
+        })
+      case read, inflate_end(z) {
+        Ok(acc), Ok(Nil) -> Ok(acc)
+        Ok(_), Error(Nil) ->
+          Error(request_body.Malformed("truncated gzip body"))
+        Error(error), _ -> Error(error)
+      }
+    }
+  }
+}
+
+/// Fold each piece of inflated output, a bounded amount at a time.
+fn inflated(
+  z: Inflater,
+  step: Inflated,
+  acc: acc,
+  f: fn(acc, BitArray) -> Result(acc, BodyError),
+) -> Result(acc, BodyError) {
+  case step {
+    InflateFailed -> Error(request_body.Malformed("invalid gzip body"))
+    Done(out) -> fold_piece(acc, out, f)
+    More(out) -> {
+      use acc <- result.try(fold_piece(acc, out, f))
+      inflated(z, inflate_continue(z), acc, f)
+    }
+  }
+}
+
+fn fold_piece(
+  acc: acc,
+  piece: BitArray,
+  f: fn(acc, BitArray) -> Result(acc, BodyError),
+) -> Result(acc, BodyError) {
+  case bit_array.byte_size(piece) {
+    0 -> Ok(acc)
+    _ -> f(acc, piece)
+  }
+}
+
+type Inflater
+
+type Inflated {
+  More(BitArray)
+  Done(BitArray)
+  InflateFailed
+}
+
+@external(erlang, "gloss@http@server_ffi", "inflate_open")
+fn inflate_open() -> Inflater
+
+@external(erlang, "gloss@http@server_ffi", "inflate")
+fn inflate(z: Inflater, data: BitArray) -> Inflated
+
+@external(erlang, "gloss@http@server_ffi", "inflate_continue")
+fn inflate_continue(z: Inflater) -> Inflated
+
+@external(erlang, "gloss@http@server_ffi", "inflate_end")
+fn inflate_end(z: Inflater) -> Result(Nil, Nil)
 
 /// The largest piece read from the socket at once.
 const piece = 65_536

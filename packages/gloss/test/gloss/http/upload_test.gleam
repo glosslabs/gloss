@@ -37,6 +37,10 @@ fn routes() {
       Error(body.Failed(error)) -> body.error_response(error)
     }
   })
+  |> router.post("/echo", fn(req, _) {
+    use text <- body.text(req)
+    reply.text(200, text)
+  })
   // Refuses without reading.
   |> router.post("/private", fn(_, _) { reply.unauthorized() })
   // Reads twice, then streams what was read.
@@ -152,6 +156,78 @@ pub fn reading_after_streaming_fails_test() {
   let assert Ok(#(500, _, _)) = read_response(socket, 1000)
   let _ = server.shutdown(srv)
 }
+
+fn post_gzip(path: String, encoding: String, payload: BitArray) -> BitArray {
+  <<
+    "POST ":utf8,
+    path:utf8,
+    " HTTP/1.1\r\ncontent-encoding: ":utf8,
+    encoding:utf8,
+    "\r\ncontent-length: ":utf8,
+    int.to_string(bit_array.byte_size(payload)):utf8,
+    "\r\n\r\n":utf8,
+    payload:bits,
+  >>
+}
+
+pub fn gzipped_bodies_are_inflated_test() {
+  let #(srv, port) = start()
+  let assert Ok(socket) = connect(port)
+  send_bits(socket, post_gzip("/echo", "gzip", gzip(<<"hello world":utf8>>)))
+  let assert Ok(#(200, _, body)) = read_response(socket, 1000)
+  body |> should.equal(<<"hello world">>)
+  // Streams see the inflated bytes, past max_body.
+  let big = gzip(bit_array.from_string(string.repeat("x", 300_000)))
+  send_bits(socket, post_gzip("/upload", "gzip", big))
+  let assert Ok(#(201, _, count)) = read_response(socket, 2000)
+  count |> should.equal(<<"300000">>)
+  let _ = server.shutdown(srv)
+}
+
+pub fn gzip_bombs_hit_max_body_test() {
+  let #(srv, port) = start()
+  let assert Ok(socket) = connect(port)
+  // 10 MB of zeros, a few kilobytes compressed; max_body is 1 KiB.
+  let bomb = gzip(<<0:size(80_000_000)>>)
+  { bit_array.byte_size(bomb) < 20_000 } |> should.be_true
+  send_bits(socket, post_gzip("/echo", "gzip", bomb))
+  let assert Ok(#(413, _, _)) = read_response(socket, 2000)
+  let _ = server.shutdown(srv)
+}
+
+pub fn bad_gzip_is_a_400_test() {
+  let #(srv, port) = start()
+  let assert Ok(socket) = connect(port)
+  send_bits(socket, post_gzip("/echo", "gzip", <<"not gzip at all":utf8>>))
+  let assert Ok(#(400, _, _)) = read_response(socket, 1000)
+
+  let assert Ok(socket) = connect(port)
+  let whole = gzip(<<"hello world":utf8>>)
+  let truncated = slice(whole, bit_array.byte_size(whole) - 6)
+  send_bits(socket, post_gzip("/echo", "gzip", truncated))
+  let assert Ok(#(400, _, body)) = read_response(socket, 1000)
+  body |> should.equal(<<"{\"error\":\"truncated gzip body\"}">>)
+  let _ = server.shutdown(srv)
+}
+
+pub fn unsupported_encodings_are_a_415_test() {
+  let #(srv, port) = start()
+  let assert Ok(socket) = connect(port)
+  send_bits(socket, post_gzip("/echo", "br", <<"x":utf8>>))
+  let assert Ok(#(415, _, _)) = read_response(socket, 1000)
+  let _ = server.shutdown(srv)
+}
+
+fn slice(bits: BitArray, length: Int) -> BitArray {
+  let assert Ok(part) = bit_array.slice(bits, 0, length)
+  part
+}
+
+@external(erlang, "compress_test_ffi", "gzip")
+fn gzip(data: BitArray) -> BitArray
+
+@external(erlang, "http_client_ffi", "send")
+fn send_bits(socket: Socket, data: BitArray) -> Nil
 
 @external(erlang, "http_client_ffi", "connect")
 fn connect(port: Int) -> Result(Socket, Nil)

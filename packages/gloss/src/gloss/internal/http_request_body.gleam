@@ -28,6 +28,8 @@ pub type BodyError {
   Consumed
   /// The stream callback asked to stop.
   Stopped
+  /// A `content-encoding` other than gzip.
+  UnsupportedEncoding(coding: String)
 }
 
 /// A body that is already in memory: for tests, and empty bodies.

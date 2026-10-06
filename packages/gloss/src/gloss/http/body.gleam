@@ -27,6 +27,10 @@
 //// over piece by piece with no size limit of its own, and reads it only
 //// once.
 ////
+//// Bodies sent with `content-encoding: gzip` are inflated as they are read;
+//// the size limits apply to the inflated bytes, so a small compressed body
+//// can't expand without limit.
+////
 //// Bodies are read from the connection by the handler's own process. A
 //// body that the handler leaves unread, or stops streaming part way, closes
 //// the connection after the response.
@@ -140,13 +144,16 @@ pub fn stream(
 }
 
 /// The response for a body that couldn't be read: `413` when too large,
-/// `400` when malformed, `408` when the client didn't send it in time, and
-/// `500` when it was already streamed.
+/// `400` when malformed, `408` when the client didn't send it in time,
+/// `415` for a `content-encoding` other than gzip, and `500` when it was
+/// already streamed.
 pub fn error_response(error: BodyError) -> Response {
   case error {
     request_body.TooLarge(_) -> reply.error(413, "content too large")
     request_body.Malformed(reason) -> reply.bad_request(reason)
     request_body.Incomplete -> reply.error(408, "request body not received")
+    request_body.UnsupportedEncoding(coding) ->
+      reply.error(415, "unsupported content-encoding " <> coding)
     request_body.Consumed | request_body.Stopped -> reply.internal_error()
   }
 }
