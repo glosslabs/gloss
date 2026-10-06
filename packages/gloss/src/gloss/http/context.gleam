@@ -31,6 +31,10 @@ pub type Context(state) {
     route: String,
     /// The `x-request-id` the client sent, or else the trace id.
     request_id: String,
+    /// The client's address. Behind a reverse proxy listed in
+    /// `server.trust_proxies`, the client's own address rather than the
+    /// proxy's.
+    client_ip: String,
     /// The request's place in a distributed trace. Send
     /// `traceparent.header(ctx.trace)` with calls to other services.
     trace: TraceParent,

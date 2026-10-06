@@ -5,6 +5,7 @@
          sha1/1, unmask/2, arm_raw/1, is_drain/1, http_date/1, pdict_get/1,
          gzip/1, gzip_open/0, gzip_chunk/2, gzip_finish/1,
          inflate_open/0, inflate/2, inflate_continue/1, inflate_end/1,
+         peer_address/1, ip_bytes/1,
          next/2, read_body/3, drain_requested/0, request_drain/1, await_go/0,
          go/1, rescue/1, http_date/0]).
 
@@ -317,3 +318,28 @@ inflate_end(Z) ->
     end,
     _ = zlib:close(Z),
     Result.
+
+%% --- Peers and proxies --------------------------------------------------------
+
+%% The connection's remote address as text, e.g. <<"203.0.113.7">>.
+peer_address(Socket) ->
+    case inet:peername(Socket) of
+        {ok, {Address, _Port}} -> list_to_binary(inet:ntoa(normalise(Address)));
+        _ -> <<"">>
+    end.
+
+%% An address's bytes: 4 for IPv4 (including IPv4-mapped IPv6), 16 for IPv6.
+ip_bytes(Text) ->
+    case inet:parse_strict_address(binary_to_list(Text)) of
+        {ok, Address} ->
+            case normalise(Address) of
+                {A, B, C, D} -> {ok, [A, B, C, D]};
+                {A, B, C, D, E, F, G, H} ->
+                    {ok, binary_to_list(<<A:16, B:16, C:16, D:16, E:16, F:16, G:16, H:16>>)}
+            end;
+        {error, _} -> {error, nil}
+    end.
+
+normalise({0, 0, 0, 0, 0, 16#ffff, AB, CD}) ->
+    {AB bsr 8, AB band 255, CD bsr 8, CD band 255};
+normalise(Address) -> Address.

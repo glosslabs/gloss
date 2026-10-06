@@ -27,7 +27,10 @@ import gloss/internal/http_server_tcp.{type Socket} as tcp
 pub type Settings {
   Settings(
     /// Serve a request, returning the response ready to send.
-    handler: fn(Request) -> Response(Wire),
+    /// Serve a request from the peer at this address.
+    handler: fn(Request, String) -> Response(Wire),
+    /// The connection's remote address; set by `serve`.
+    peer: String,
     /// Render a response the connection itself produced, for a request
     /// with this `Accept` header.
     render: fn(reply.Response, Result(String, Nil)) -> Response(Wire),
@@ -53,7 +56,7 @@ pub type Problem {
 /// Serve the connection until it closes. Runs in the connection's process,
 /// which must own the socket.
 pub fn serve(socket: Socket, settings: Settings) -> Nil {
-  await_request(socket, settings)
+  await_request(socket, Settings(..settings, peer: tcp.peer_address(socket)))
 }
 
 fn await_request(socket: Socket, settings: Settings) -> Nil {
@@ -411,7 +414,7 @@ fn respond(
   framing: http1.BodyFraming,
   draining: Bool,
 ) -> Nil {
-  let response = settings.handler(http1.to_request(head, body))
+  let response = settings.handler(http1.to_request(head, body), settings.peer)
   // A drain requested while the handler ran is still waiting in the mailbox.
   let draining = draining || tcp.drain_requested()
   // Unread or half-read body bytes would be taken for the next request.

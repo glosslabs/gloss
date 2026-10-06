@@ -1,7 +1,10 @@
 import gleam/erlang/process
 import gleam/http
 import gleam/http/request
+import gleam/int
 import gleam/list
+import gleam/option.{None, Some}
+import gleam/string
 import gleeunit/should
 import gloss/http/csrf
 import gloss/http/reply
@@ -10,10 +13,25 @@ import gloss/http/server
 import gloss/tracer
 import http_support.{drain, request}
 
+/// A POST with these headers. A `host` entry sets the request's host and
+/// port, as the server does from the `Host` header.
 fn post(headers: List(#(String, String))) {
   list.fold(headers, request(http.Post, "/"), fn(req, h) {
-    request.set_header(req, h.0, h.1)
+    case h {
+      #("host", host) ->
+        case string.split_once(host, "]:"), string.split_once(host, ":") {
+          Ok(#(ip, port)), _ -> with_host(req, ip <> "]", port)
+          _, Ok(#(name, port)) -> with_host(req, name, port)
+          _, _ -> request.Request(..req, host:, port: None)
+        }
+      _ -> request.set_header(req, h.0, h.1)
+    }
   })
+}
+
+fn with_host(req, host: String, port: String) {
+  let assert Ok(port) = int.parse(port)
+  request.Request(..req, host:, port: Some(port))
 }
 
 fn allowed(config: csrf.Config, headers: List(#(String, String))) -> Bool {

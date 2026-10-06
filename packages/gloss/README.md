@@ -64,7 +64,7 @@ pub fn show(_req: Request, ctx: Context(App)) -> Response {
 
 | Module | |
 |---|---|
-| `gloss/http/server` | Builder (`new`, `port`, `bind`, `tracer`, `logger`, `with`, limits), `start`, `supervised`, `shutdown`, and `handle` for tests |
+| `gloss/http/server` | Builder (`new`, `port`, `bind`, `tracer`, `logger`, `with`, `trust_proxies`, limits), `start`, `supervised`, `shutdown`, and `handle` for tests |
 | `gloss/http/router` | `group`, `with`, `get`/`post`/…, `combine`, `check`, `describe`, `inspect`, `allowed_methods` |
 | `gloss/http/context` | `Context(state)`, `Handler`, `Middleware`, `param`/`int_param` |
 | `gloss/http/reply` | `Request`/`Response`/`Body` types, `json`, `text`, `html`, `bytes`, `stream`, `empty`, error replies (`error`, `problem`, `not_found`, …), `preferred` |
@@ -133,7 +133,9 @@ caught by the BEAM and stops the node immediately.
 
 ### Limits
 
-HTTP/1.1 only, without TLS: run behind a proxy that terminates it. Request
+HTTP/1.1 only, without TLS: run behind a reverse proxy that terminates it,
+and list it in `server.trust_proxies` so `ctx.client_ip`, `req.scheme` and
+`req.host` describe the client rather than the proxy. Request
 bodies may be sent with `Content-Length` or chunked. They are read only when
 a handler asks: in full up to `max_body` (`body.bits`/`text`/`json`), or
 streamed piece by piece for large uploads (`body.stream`). Responses can be streamed with `reply.stream` (chunked

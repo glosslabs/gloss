@@ -17,6 +17,8 @@
 ////    and `none` (typed in the address bar, bookmarks) pass. `same-site`
 ////    and `cross-site` are rejected unless `Origin` is trusted.
 //// 2. Without it, an `Origin` header must name this host (or be trusted).
+////    Behind a reverse proxy, list it in `server.trust_proxies` so the host
+////    the client used is known.
 //// 3. With neither header the request is not from a browser, so it can't
 ////    be forged by a third-party page, and it passes.
 ////
@@ -25,8 +27,9 @@
 
 import gleam/http
 import gleam/http/request
+import gleam/int
 import gleam/list
-import gleam/option.{Some}
+import gleam/option.{None, Some}
 import gleam/string
 import gleam/time/timestamp
 import gloss/http/context.{type Context, type Handler, type Middleware}
@@ -96,7 +99,7 @@ pub fn check(config: Config, req: Request) -> Result(Nil, String) {
     _, Ok("same-origin"), _ | _, Ok("none"), _ -> Ok(Nil)
     _, Ok(site), _ -> Error("sec-fetch-site " <> site)
     _, Error(Nil), Ok(origin) ->
-      case same_host(origin, request.get_header(req, "host")) {
+      case same_host(origin, host(req)) {
         True -> Ok(Nil)
         False -> Error("origin " <> origin)
       }
@@ -111,7 +114,17 @@ fn safe(method: http.Method) -> Bool {
   }
 }
 
-/// Whether `origin` (`scheme://host[:port]`) names the `Host` header,
+/// The host the client asked for: `req.host` and `req.port`, which follow
+/// trusted proxies' forwarding headers (see `server.trust_proxies`).
+fn host(req: Request) -> Result(String, Nil) {
+  case req.host, req.port {
+    "", _ -> Error(Nil)
+    host, Some(port) -> Ok(host <> ":" <> int.to_string(port))
+    host, None -> Ok(host)
+  }
+}
+
+/// Whether `origin` (`scheme://host[:port]`) names the requested host,
 /// treating a missing port as the scheme's default.
 fn same_host(origin: String, host: Result(String, Nil)) -> Bool {
   case string.split_once(string.lowercase(origin), "://"), host {

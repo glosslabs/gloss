@@ -69,6 +69,7 @@ import gloss/http/context.{type Handler, type Middleware, Context}
 import gloss/http/reply.{type ErrorPage, type Request}
 import gloss/http/router.{type RouteError, type Router}
 import gloss/http/traceparent.{type TraceParent}
+import gloss/internal/http_forwarded as forwarded
 import gloss/internal/http_reply_render.{type Wire} as reply_render
 import gloss/internal/http_server_connection as connection
 import gloss/internal/http_server_control as control
@@ -93,6 +94,7 @@ pub opaque type Builder(state) {
     idle_timeout: Duration,
     shutdown_timeout: Duration,
     acceptors: Int,
+    trusted_proxies: List(forwarded.Cidr),
     on_started: List(fn(Started) -> Nil),
     on_stopped: List(fn(Stopped) -> Nil),
     error_page: fn(ErrorPage) -> String,
@@ -154,6 +156,7 @@ pub fn new(router: Router(state), state: state) -> Builder(state) {
     idle_timeout: duration.seconds(60),
     shutdown_timeout: duration.seconds(10),
     acceptors: 10,
+    trusted_proxies: [],
     on_started: [],
     on_stopped: [],
     error_page: reply.default_error_page,
@@ -227,6 +230,33 @@ pub fn shutdown_timeout(
   timeout: Duration,
 ) -> Builder(state) {
   Builder(..builder, shutdown_timeout: timeout)
+}
+
+/// Believe forwarding headers (`Forwarded`, `X-Forwarded-For`,
+/// `X-Forwarded-Proto`, `X-Forwarded-Host`) on connections from these
+/// addresses or CIDR blocks: your reverse proxies, e.g. `["127.0.0.1",
+/// "::1", "10.0.0.0/8"]`. Requests through them then carry the client's
+/// address in `ctx.client_ip`, and the scheme and host the client used in
+/// `req.scheme` and `req.host`. From any other address the headers are
+/// ignored, since clients can set them to anything.
+///
+/// Panics on an entry that isn't an address or CIDR block.
+pub fn trust_proxies(
+  builder: Builder(state),
+  proxies: List(String),
+) -> Builder(state) {
+  let trusted =
+    list.map(proxies, fn(proxy) {
+      case forwarded.parse_cidr(proxy) {
+        Ok(cidr) -> cidr
+        Error(Nil) ->
+          panic as { "server.trust_proxies: invalid address " <> proxy }
+      }
+    })
+  Builder(
+    ..builder,
+    trusted_proxies: list.append(builder.trusted_proxies, trusted),
+  )
 }
 
 /// How many processes accept connections concurrently.
@@ -325,6 +355,7 @@ fn start_control(
   let settings =
     connection.Settings(
       handler: pipeline,
+      peer: "",
       render: fn(response, accept) {
         reply_render.render(response, accept, builder.error_page)
       },
@@ -421,7 +452,7 @@ pub fn handle(
 ) -> Response(BytesTree) {
   case router.table(builder.router) {
     Ok(table) -> {
-      let response = pipeline(builder, table)(request)
+      let response = pipeline(builder, table)(request, "127.0.0.1")
       response.set_body(response, materialise(response.body))
     }
     Error(errors) -> panic as { "invalid routes: " <> string.inspect(errors) }
@@ -467,11 +498,20 @@ fn read_range(path: String, offset: Int, length: Int) -> Result(BitArray, Nil)
 fn pipeline(
   builder: Builder(state),
   table: router.Table(state),
-) -> fn(Request) -> Response(Wire) {
-  let Builder(state:, logger: log, tracer:, middleware:, error_page:, ..) =
-    builder
-  fn(request: Request) {
+) -> fn(Request, String) -> Response(Wire) {
+  let Builder(
+    state:,
+    logger: log,
+    tracer:,
+    middleware:,
+    error_page:,
+    trusted_proxies:,
+    ..,
+  ) = builder
+  fn(request: Request, peer: String) {
     let at = timestamp.system_time()
+    let origin = forwarded.resolve(request.headers, peer, trusted_proxies)
+    let request = with_origin(request, origin)
     let started = monotonic_ns()
     let upstream = traceparent.from_request(request)
     let trace = case upstream {
@@ -494,6 +534,7 @@ fn pipeline(
         route:,
         request_id:,
         trace:,
+        client_ip: origin.client_ip,
         log: logger.with_context(log, log_context(request_id, trace, route)),
         tracer: tracer,
       )
@@ -517,7 +558,7 @@ fn pipeline(
         source:,
         name: span_name(request.method, route),
         at:,
-        meta: span_meta(request, route, response, request_id),
+        meta: span_meta(request, route, response, request_id, origin.client_ip),
         duration: duration.nanoseconds(monotonic_ns() - started),
         error: failure,
         trace: traceparent.span_context(trace),
@@ -528,6 +569,26 @@ fn pipeline(
       )
     })
     response
+  }
+}
+
+/// The request as the client sent it to the outermost trusted proxy.
+fn with_origin(request: Request, origin: forwarded.Origin) -> Request {
+  let request = case origin.scheme {
+    Some(scheme) -> request.Request(..request, scheme:)
+    None -> request
+  }
+  case origin.host {
+    Some(host) ->
+      case string.split_once(host, ":") {
+        Ok(#(name, port)) ->
+          case int.parse(port) {
+            Ok(port) -> request.Request(..request, host: name, port: Some(port))
+            Error(Nil) -> request.Request(..request, host:, port: None)
+          }
+        Error(Nil) -> request.Request(..request, host:, port: None)
+      }
+    None -> request
   }
 }
 
@@ -583,8 +644,10 @@ fn span_meta(
   route: String,
   response: Response(Wire),
   request_id: String,
+  client_ip: String,
 ) -> meta.Meta {
   [
+    #("client_ip", meta.String(client_ip)),
     #("method", meta.String(http.method_to_string(request.method))),
     #("path", meta.String(request.path)),
     #("route", meta.String(route)),

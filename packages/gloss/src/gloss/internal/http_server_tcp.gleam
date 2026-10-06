@@ -67,6 +67,10 @@ pub fn sendfile(
   length: Int,
 ) -> Result(Nil, Nil)
 
+/// The remote address, e.g. `"203.0.113.7"`.
+@external(erlang, "gloss@http@server_ffi", "peer_address")
+pub fn peer_address(socket: Socket) -> String
+
 @external(erlang, "gloss@http@server_ffi", "next")
 pub fn next(socket: Socket, timeout: Int) -> Event
 

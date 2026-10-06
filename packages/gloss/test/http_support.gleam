@@ -29,6 +29,7 @@ pub fn ctx(state: state) -> Context(state) {
     route: "",
     request_id: "test",
     trace: traceparent.new(),
+    client_ip: "127.0.0.1",
     log: logger.discard(),
     tracer: tracer.new(),
   )
