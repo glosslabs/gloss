@@ -72,6 +72,7 @@ pub fn show(_req: Request, ctx: Context(App)) -> Response {
 | `gloss/http/cookie` | `get`, `all`, `set`, `delete`, with secure `defaults()` |
 | `gloss/http/session` | Server-side sessions: `load`, `get`/`set`/`remove`, `save`, `regenerate`, `destroy`, over a pluggable `Store` |
 | `gloss/http/session/memory` | The default store: an ETS table swept of expired sessions every minute |
+| `gloss/http/csrf` | Cross-site request forgery protection from `Sec-Fetch-Site` and `Origin`, with no tokens |
 
 ### Errors follow the `Accept` header
 
