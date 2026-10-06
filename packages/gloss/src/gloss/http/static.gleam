@@ -11,10 +11,15 @@
 //// `404`, as are directories and missing files. Files are sent by the
 //// operating system without being read into memory.
 ////
-//// Each response has a `content-type` from the file's extension, a weak
-//// `etag` from its size and modification time, and `cache-control`
-//// (`no-cache` by default, so clients revalidate every use and get a
-//// `304 Not Modified` while the file is unchanged). For fingerprinted
+//// Each response has a `content-type` from the file's extension, an `etag`
+//// and `last-modified` from its size and modification time, and
+//// `cache-control` (`no-cache` by default, so clients revalidate every use
+//// and get a `304 Not Modified` while the file is unchanged).
+////
+//// Large media can be fetched in parts: a `range` header asking for one
+//// byte range is answered `206 Partial Content` (or `416` when it lies
+//// outside the file), so video and audio players can seek and downloads
+//// can resume. `if-range` is respected. For fingerprinted
 //// assets (`app.3f9a1c.css`) use a long cache instead:
 ////
 //// ```gleam
@@ -74,15 +79,37 @@ fn serve(req: Request, config: Config, path: String) -> Response {
   case file_info(path) {
     Ok(#(size, mtime)) -> {
       let etag =
-        "W/\"" <> int.to_base16(size) <> "-" <> int.to_base16(mtime) <> "\""
-      case fresh(req, etag) {
-        True -> reply.empty(304)
-        False ->
-          response.new(200)
-          |> response.set_body(reply.File(path:, offset: 0, length: size))
-          |> response.set_header("content-type", content_type(path))
+        "\"" <> int.to_base16(size) <> "-" <> int.to_base16(mtime) <> "\""
+      let last_modified = http_date(mtime)
+      let file = fn(status, offset, length) {
+        response.new(status)
+        |> response.set_body(reply.File(path:, offset:, length:))
+        |> response.set_header("content-type", content_type(path))
+      }
+      case fresh(req, etag), wanted_range(req, etag, last_modified, size) {
+        True, _ -> reply.empty(304)
+        False, Whole -> file(200, 0, size)
+        False, Part(first, last) ->
+          file(206, first, last - first + 1)
+          |> response.set_header(
+            "content-range",
+            "bytes "
+              <> int.to_string(first)
+              <> "-"
+              <> int.to_string(last)
+              <> "/"
+              <> int.to_string(size),
+          )
+        False, Unsatisfiable ->
+          reply.error(416, "range not satisfiable")
+          |> response.set_header(
+            "content-range",
+            "bytes */" <> int.to_string(size),
+          )
       }
       |> response.set_header("etag", etag)
+      |> response.set_header("last-modified", last_modified)
+      |> response.set_header("accept-ranges", "bytes")
       |> response.set_header("cache-control", config.cache_control)
     }
     Error(Nil) -> reply.not_found()
@@ -90,14 +117,83 @@ fn serve(req: Request, config: Config, path: String) -> Response {
 }
 
 /// Whether the client's cached copy, named by `if-none-match`, is current.
+/// A weak comparison: `W/` prefixes are ignored.
 fn fresh(req: Request, etag: String) -> Bool {
   case request.get_header(req, "if-none-match") {
     Ok(header) ->
       header
       |> string.split(",")
-      |> list.map(string.trim)
+      |> list.map(fn(tag) {
+        case string.trim(tag) {
+          "W/" <> tag -> tag
+          tag -> tag
+        }
+      })
       |> list.any(fn(tag) { tag == etag || tag == "*" })
     Error(Nil) -> False
+  }
+}
+
+pub type Range {
+  Whole
+  /// Bytes `first` to `last`, inclusive.
+  Part(first: Int, last: Int)
+  Unsatisfiable
+}
+
+/// What part of the file to send. A `range` is honoured only when an
+/// `if-range` header, if any, still names this version of the file.
+fn wanted_range(
+  req: Request,
+  etag: String,
+  last_modified: String,
+  size: Int,
+) -> Range {
+  let current = case request.get_header(req, "if-range") {
+    Ok(validator) -> validator == etag || validator == last_modified
+    Error(Nil) -> True
+  }
+  case current, request.get_header(req, "range") {
+    True, Ok(header) -> parse_range(header, size)
+    _, _ -> Whole
+  }
+}
+
+/// A `range` header against a file of `size` bytes. Only single byte
+/// ranges are served; anything else, including several ranges, gets the
+/// whole file.
+pub fn parse_range(header: String, size: Int) -> Range {
+  case string.trim(header) {
+    "bytes=" <> spec ->
+      case string.split(spec, ","), size {
+        [_, _, ..], _ -> Whole
+        _, 0 -> Unsatisfiable
+        [one], _ ->
+          case string.split_once(string.trim(one), "-") {
+            // The last `n` bytes.
+            Ok(#("", n)) ->
+              case int.parse(n) {
+                Ok(n) if n > 0 -> Part(int.max(size - n, 0), size - 1)
+                Ok(_) -> Unsatisfiable
+                Error(Nil) -> Whole
+              }
+            Ok(#(first, last)) ->
+              case int.parse(first), last {
+                Ok(first), _ if first >= size -> Unsatisfiable
+                Ok(first), "" -> Part(first, size - 1)
+                Ok(first), last ->
+                  case int.parse(last) {
+                    Ok(last) if last >= first ->
+                      Part(first, int.min(last, size - 1))
+                    _ -> Whole
+                  }
+                Error(Nil), _ -> Whole
+              }
+            Error(Nil) -> Whole
+          }
+        [], _ -> Whole
+      }
+    _ -> Whole
   }
 }
 
@@ -172,6 +268,10 @@ pub fn content_type(path: String) -> String {
 /// The size and modification time of a regular file.
 @external(erlang, "gloss@http@server_ffi", "file_info")
 fn file_info(path: String) -> Result(#(Int, Int), Nil)
+
+/// An IMF-fixdate for a time in Unix seconds.
+@external(erlang, "gloss@http@server_ffi", "http_date")
+fn http_date(seconds: Int) -> String
 
 @external(erlang, "gloss@http@server_ffi", "priv_dir")
 fn priv_dir(name: String) -> Result(String, Nil)

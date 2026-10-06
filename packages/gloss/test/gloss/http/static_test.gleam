@@ -92,6 +92,62 @@ pub fn custom_cache_control_test() {
   |> should.equal("public, max-age=60")
 }
 
+pub fn parse_range_test() {
+  let size = 100
+  static.parse_range("bytes=0-9", size) |> should.equal(static.Part(0, 9))
+  static.parse_range("bytes=90-", size) |> should.equal(static.Part(90, 99))
+  static.parse_range("bytes=-10", size) |> should.equal(static.Part(90, 99))
+  static.parse_range("bytes=-500", size) |> should.equal(static.Part(0, 99))
+  static.parse_range("bytes=50-500", size) |> should.equal(static.Part(50, 99))
+  static.parse_range("bytes=100-", size) |> should.equal(static.Unsatisfiable)
+  static.parse_range("bytes=-0", size) |> should.equal(static.Unsatisfiable)
+  static.parse_range("bytes=0-1, 5-6", size) |> should.equal(static.Whole)
+  static.parse_range("bytes=9-0", size) |> should.equal(static.Whole)
+  static.parse_range("items=0-1", size) |> should.equal(static.Whole)
+  static.parse_range("bytes=0-", 0) |> should.equal(static.Unsatisfiable)
+}
+
+fn ranged(dir: String, range: String) {
+  server.handle(
+    builder(static.new(dir)),
+    request(http.Get, "/assets/js/app.js") |> request.set_header("range", range),
+  )
+}
+
+pub fn range_requests_test() {
+  let dir = site()
+  // "let x = 1" is 9 bytes.
+  let res = ranged(dir, "bytes=4-6")
+  res.status |> should.equal(206)
+  rendered_body(res) |> should.equal("x =")
+  header(res, "content-range") |> should.equal("bytes 4-6/9")
+  header(res, "accept-ranges") |> should.equal("bytes")
+
+  ranged(dir, "bytes=-1") |> rendered_body |> should.equal("1")
+
+  let res = ranged(dir, "bytes=20-")
+  res.status |> should.equal(416)
+  header(res, "content-range") |> should.equal("bytes */9")
+
+  ranged(dir, "bytes=0-1,3-4").status |> should.equal(200)
+}
+
+pub fn if_range_test() {
+  let dir = site()
+  let whole = get(dir, "/assets/js/app.js")
+  let with_if_range = fn(validator) {
+    server.handle(
+      builder(static.new(dir)),
+      request(http.Get, "/assets/js/app.js")
+        |> request.set_header("range", "bytes=0-2")
+        |> request.set_header("if-range", validator),
+    ).status
+  }
+  with_if_range(header(whole, "etag")) |> should.equal(206)
+  with_if_range(header(whole, "last-modified")) |> should.equal(206)
+  with_if_range("\"stale\"") |> should.equal(200)
+}
+
 pub fn content_type_test() {
   static.content_type("a/b/logo.SVG") |> should.equal("image/svg+xml")
   static.content_type("Makefile") |> should.equal("application/octet-stream")
@@ -115,6 +171,11 @@ pub fn sendfile_over_a_socket_test() {
   send(socket, "GET /assets/app.css HTTP/1.1\r\n\r\n")
   let assert Ok(#(_, _, body)) = read_response(socket, 1000)
   body |> should.equal(<<"body{}">>)
+  // A range is sent from the right offset.
+  send(socket, "GET /assets/js/app.js HTTP/1.1\r\nrange: bytes=4-\r\n\r\n")
+  let assert Ok(#(status, _, body)) = read_response(socket, 1000)
+  status |> should.equal(206)
+  body |> should.equal(<<"x = 1">>)
   let _ = server.shutdown(srv)
 }
 

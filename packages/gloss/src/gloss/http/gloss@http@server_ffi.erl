@@ -2,7 +2,7 @@
 
 -export([listen/3, port/1, accept/1, controlling_process/2, close/1, send/2,
          sendfile/4, read_range/3, file_info/1, priv_dir/1, read_line/2,
-         sha1/1, unmask/2, arm_raw/1, is_drain/1,
+         sha1/1, unmask/2, arm_raw/1, is_drain/1, http_date/1,
          next/2, read_body/3, drain_requested/0, request_drain/1, await_go/0,
          go/1, rescue/1, http_date/0]).
 
@@ -237,7 +237,13 @@ arity(Arity) -> Arity.
 
 %% An IMF-fixdate for the `date` header, e.g. `Tue, 06 Oct 2026 12:00:00 GMT`.
 http_date() ->
-    {{Y, Mo, D} = Date, {H, Mi, S}} = calendar:universal_time(),
+    format_date(calendar:universal_time()).
+
+%% The same for a time in Unix seconds.
+http_date(Seconds) ->
+    format_date(calendar:system_time_to_universal_time(Seconds, second)).
+
+format_date({{Y, Mo, D} = Date, {H, Mi, S}}) ->
     Day = element(calendar:day_of_the_week(Date),
                   {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}),
     Month = element(Mo, {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul",
