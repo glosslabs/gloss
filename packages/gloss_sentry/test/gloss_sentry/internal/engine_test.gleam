@@ -24,6 +24,7 @@ fn settings(max_queue: Int, breadcrumbs: Int) -> engine.Settings {
     server_name: "box",
     max_queue:,
     breadcrumbs:,
+    trace_id: "0123456789abcdef0123456789abcdef",
   )
 }
 

@@ -138,9 +138,9 @@ describe_exception(Class, Reason, _) ->
 arity(Args) when is_list(Args) -> length(Args);
 arity(Arity) -> Arity.
 
-%% 16 lowercase hex characters.
+%% 32 lowercase hex characters: the size of a W3C trace id.
 random_id() ->
-    string:lowercase(binary:encode_hex(crypto:strong_rand_bytes(8))).
+    string:lowercase(binary:encode_hex(crypto:strong_rand_bytes(16))).
 
 %% An IMF-fixdate for the `date` header, e.g. `Tue, 06 Oct 2026 12:00:00 GMT`.
 http_date() ->

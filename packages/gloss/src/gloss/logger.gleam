@@ -1,8 +1,9 @@
 //// Structured logging shared by the application and every gloss library.
 ////
 //// A `Logger` is a destination for `Entry`s. Build one from a channel
-//// (`stderr`, `otp`, `memory`, `discard`, or `new` with your own writer),
-//// shape it with `min_level`, `with_context` and `stack`, then write to it
+//// (`stdout`, `stderr`, `otp`, `memory`, `discard`, `gloss/logger/file`,
+//// or `new` with your own writer), shape it with `min_level`, `max_level`,
+//// `with_context` and `stack`, then write to it
 //// through its own `debug`, `info`, `warning` and `error` functions:
 ////
 //// ```gleam
@@ -98,6 +99,25 @@ pub fn min_level(logger: Logger, level: Level) -> Logger {
   })
 }
 
+/// Drop entries above `level`. With `min_level`, splits entries between
+/// channels:
+///
+/// ```gleam
+/// logger.stack([
+///   logger.stdout() |> logger.max_level(logger.Info),
+///   logger.stderr() |> logger.min_level(logger.Warning),
+/// ])
+/// ```
+pub fn max_level(logger: Logger, level: Level) -> Logger {
+  let ceiling = rank(level)
+  new(fn(record) {
+    case rank(record.level) <= ceiling {
+      True -> logger.write(record)
+      False -> Nil
+    }
+  })
+}
+
 /// Prepend `context` to every entry's meta. Context added earlier comes first.
 pub fn with_context(logger: Logger, context: Meta) -> Logger {
   new(fn(record) {
@@ -108,6 +128,11 @@ pub fn with_context(logger: Logger, context: Meta) -> Logger {
 /// One `format`ted line per entry on standard error.
 pub fn stderr() -> Logger {
   new(fn(record) { io.println_error(format(record)) })
+}
+
+/// One `format`ted line per entry on standard output.
+pub fn stdout() -> Logger {
+  new(fn(record) { io.println(format(record)) })
 }
 
 /// Send every entry to `subject`. For tests.

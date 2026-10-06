@@ -248,6 +248,10 @@ pub fn envelope(dsn: Dsn, event: Event, sent_at: Timestamp) -> Request(String) {
     <> "\n"
     <> payload
     <> "\n"
+  post(dsn, body)
+}
+
+fn post(dsn: Dsn, body: String) -> Request(String) {
   let auth =
     "Sentry sentry_version=7, sentry_client="
     <> client
@@ -268,4 +272,113 @@ pub fn envelope(dsn: Dsn, event: Event, sent_at: Timestamp) -> Request(String) {
   |> request.set_header("user-agent", client)
   |> request.set_header("x-sentry-auth", auth)
   |> request.set_body(body)
+}
+
+// --- Logs --------------------------------------------------------------------
+
+/// One entry for Sentry's Logs product.
+pub type Log {
+  Log(
+    at: Timestamp,
+    level: Level,
+    body: String,
+    /// 32 lowercase hex characters.
+    trace_id: String,
+    attributes: Meta,
+  )
+}
+
+/// What every log is tagged with.
+pub type LogContext {
+  LogContext(environment: String, release: String, server_name: String)
+}
+
+pub fn log_json(log: Log, context: LogContext) -> Json {
+  let #(level, severity) = case log.level {
+    Debug -> #("debug", 5)
+    Info -> #("info", 9)
+    Warning -> #("warn", 13)
+    Error -> #("error", 17)
+    Fatal -> #("fatal", 21)
+  }
+  let defaults =
+    list.flatten([
+      [
+        #("sentry.environment", meta.String(context.environment)),
+        #("sentry.sdk.name", meta.String(sdk_name)),
+        #("sentry.sdk.version", meta.String(sdk_version)),
+        #("server.address", meta.String(context.server_name)),
+      ],
+      case context.release {
+        "" -> []
+        release -> [#("sentry.release", meta.String(release))]
+      },
+    ])
+  json.object([
+    #("timestamp", json.float(timestamp.to_unix_seconds(log.at))),
+    #("trace_id", json.string(log.trace_id)),
+    #("level", json.string(level)),
+    #("severity_number", json.int(severity)),
+    #("body", json.string(log.body)),
+    #(
+      "attributes",
+      json.object(
+        list.map(list.append(log.attributes, defaults), fn(entry) {
+          #(entry.0, attribute_json(entry.1))
+        }),
+      ),
+    ),
+  ])
+}
+
+fn attribute_json(value: Value) -> Json {
+  let #(type_, json_value) = case value {
+    meta.String(s) -> #("string", json.string(s))
+    meta.Int(i) -> #("integer", json.int(i))
+    meta.Float(f) -> #("double", json.float(f))
+    meta.Bool(b) -> #("boolean", json.bool(b))
+  }
+  json.object([#("value", json_value), #("type", json.string(type_))])
+}
+
+/// The POST for a batch of logs, oldest first, as one `log` item.
+pub fn log_envelope(
+  dsn: Dsn,
+  logs: List(Log),
+  context: LogContext,
+  sent_at: Timestamp,
+) -> Request(String) {
+  let payload =
+    json.to_string(
+      json.object([
+        #("items", json.array(logs, fn(log) { log_json(log, context) })),
+      ]),
+    )
+  let header =
+    json.object([
+      #("sent_at", json.string(rfc3339(sent_at))),
+      #(
+        "sdk",
+        json.object([
+          #("name", json.string(sdk_name)),
+          #("version", json.string(sdk_version)),
+        ]),
+      ),
+    ])
+  let item =
+    json.object([
+      #("type", json.string("log")),
+      #("item_count", json.int(list.length(logs))),
+      #("content_type", json.string("application/vnd.sentry.items.log+json")),
+      #("length", json.int(bit_array.byte_size(bit_array.from_string(payload)))),
+    ])
+  post(
+    dsn,
+    json.to_string(header)
+      <> "\n"
+      <> json.to_string(item)
+      <> "\n"
+      <> payload
+      <> "\n",
+  )
 }

@@ -183,3 +183,29 @@ pub fn trace_handler_writes_events_test() {
   let assert [Entry(level: logger.Info, message: "test thing.happened", ..)] =
     drain(seen)
 }
+
+pub fn max_level_filters_test() {
+  let #(log, seen) = capture()
+  let quiet = log |> logger.max_level(logger.Info)
+  quiet.debug("d", [])
+  quiet.info("i", [])
+  quiet.warning("w", [])
+  quiet.error("e", [])
+  drain(seen) |> list.map(fn(r) { r.message }) |> should.equal(["d", "i"])
+}
+
+pub fn split_channels_test() {
+  let out = process.new_subject()
+  let err = process.new_subject()
+  let log =
+    logger.stack([
+      logger.memory(out) |> logger.max_level(logger.Info),
+      logger.memory(err) |> logger.min_level(logger.Warning),
+    ])
+  log.debug("d", [])
+  log.info("i", [])
+  log.warning("w", [])
+  log.error("e", [])
+  drain(out) |> list.map(fn(r) { r.message }) |> should.equal(["d", "i"])
+  drain(err) |> list.map(fn(r) { r.message }) |> should.equal(["w", "e"])
+}

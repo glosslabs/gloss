@@ -28,7 +28,13 @@ fn call(req: Request) -> Response(BytesTree) {
 /// Run several requests against one application.
 fn session() -> fn(Request) -> Response(BytesTree) {
   let config =
-    Config(port: 0, environment: "test", sentry_dsn: None, api_token: "t")
+    Config(
+      port: 0,
+      environment: "test",
+      sentry_dsn: None,
+      api_token: "t",
+      log_dir: "build/test-log",
+    )
   let assert Ok(notes) = notes.start()
   let ctx =
     state.new(config, log: logger.discard(), tracer: tracer.new(), notes:)

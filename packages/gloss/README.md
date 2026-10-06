@@ -8,7 +8,8 @@ packages.
 |---|---|
 | `gloss/http/*` | HTTP/1.1 server, router, request context, replies and body decoding |
 | `gloss/tracer` | Spans and points, delivered to handlers you attach |
-| `gloss/logger` | Structured logging with channels (`stderr`, `otp`, `memory`, …) |
+| `gloss/logger` | Structured logging with channels (`stdout`, `stderr`, `otp`, `memory`, …), `min_level`/`max_level` to split them |
+| `gloss/logger/file` | A log channel that appends to a file and rotates it by size |
 | `gloss/meta` | Key/value metadata shared by the tracer and logger |
 | `gloss/scheduler` | Interval and cron tasks |
 | `gloss/signal` | SIGTERM/SIGHUP delivery for graceful shutdown |

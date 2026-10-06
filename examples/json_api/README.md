@@ -23,6 +23,7 @@ Other tasks: `mise run test`, `mise run format`, and `mise run check`
 | `API_TOKEN` | `dev` | Bearer token for `/auth` and `/notes` |
 | `SENTRY_DSN` | unset | Report failed requests to Sentry |
 | `APP_ENV` | `development` | Sentry environment |
+| `LOG_DIR` | `log` | Where `app.log` (debug, info) and `error.log` (warnings, errors) are written; each rotates at 10 MB, keeping 5 |
 
 ## Layout
 
@@ -35,7 +36,7 @@ add more as the application grows.
 | `app/config` | Settings from the environment |
 | `app/state` | `State`, what handlers reach through `ctx.state` |
 | `app/notes` | The notes domain: an in-memory store |
-| `app/reporters` | Where logs, traces and failures go: stderr, plus Sentry when configured |
+| `app/reporters` | Where logs, traces and failures go: stdout/stderr and rotated files split by level, plus Sentry errors and logs when configured |
 | `app/server` | The HTTP server: combines the route groups and starts serving |
 | `app/routes/api` | The API's route table, and nothing else |
 | `app/handlers/*` | One module per resource: `health`, `notes`, `users` |

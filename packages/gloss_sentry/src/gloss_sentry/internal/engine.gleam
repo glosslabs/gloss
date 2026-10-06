@@ -9,8 +9,10 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/order
+import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
+import gloss/logger
 import gloss/meta.{type Meta}
 import gloss/tracer
 import gloss_sentry/internal/dsn.{type Dsn}
@@ -22,6 +24,10 @@ pub type Message {
   Traced(tracer.Event)
   /// An explicit `capture`.
   Captured(at: Timestamp, body: envelope.Body, meta: Meta)
+  /// An entry for Sentry Logs.
+  Logged(logger.Entry)
+  /// Send the buffered logs now.
+  FlushLogs
   /// The poster finished; `Error` is a transport failure.
   Posted(Result(Response(String), String))
   /// The poster died before reporting.
@@ -39,8 +45,16 @@ pub type Settings {
     max_queue: Int,
     /// Recent events kept as breadcrumbs for the next error.
     breadcrumbs: Int,
+    /// The trace id for logs written outside a request: 32 hex characters.
+    trace_id: String,
   )
 }
+
+/// Logs go out in envelopes of at most this many, per Sentry's SDK spec.
+pub const log_batch = 100
+
+/// Buffered logs are sent at most this long after the first one arrives.
+pub const log_interval_ms = 5000
 
 pub type State {
   State(
@@ -53,11 +67,16 @@ pub type State {
     crumbs: List(Breadcrumb),
     crumb_count: Int,
     limited_until: Option(Timestamp),
+    /// Newest first.
+    logs: List(envelope.Log),
+    log_count: Int,
   )
 }
 
 pub type Effect {
   Post(Request(String))
+  /// Send `FlushLogs` back after this many milliseconds.
+  ScheduleFlush(after_ms: Int)
 }
 
 pub fn init(settings: Settings) -> State {
@@ -69,6 +88,8 @@ pub fn init(settings: Settings) -> State {
     crumbs: [],
     crumb_count: 0,
     limited_until: None,
+    logs: [],
+    log_count: 0,
   )
 }
 
@@ -135,8 +156,66 @@ pub fn handle(
         limited_until: Some(rate_limit.backoff_until(now)),
       )
       |> pump(now)
+    Logged(entry) -> {
+      let state =
+        State(
+          ..state,
+          logs: [to_log(state, entry), ..state.logs],
+          log_count: state.log_count + 1,
+        )
+      case state.log_count {
+        n if n >= log_batch -> flush_logs(state, now)
+        1 -> #(state, [ScheduleFlush(log_interval_ms)])
+        _ -> #(state, [])
+      }
+    }
+    FlushLogs -> flush_logs(state, now)
     Stop -> #(state, [])
   }
+}
+
+fn flush_logs(state: State, now: Timestamp) -> #(State, List(Effect)) {
+  case state.logs {
+    [] -> #(state, [])
+    logs -> {
+      let settings = state.settings
+      let context =
+        envelope.LogContext(
+          environment: settings.environment,
+          release: settings.release,
+          server_name: settings.server_name,
+        )
+      let request =
+        envelope.log_envelope(settings.dsn, list.reverse(logs), context, now)
+      State(..state, logs: [], log_count: 0) |> enqueue_request(request, now)
+    }
+  }
+}
+
+/// A log carries the request's id as its trace id when the entry has a
+/// 32-character `request_id`, so a request's logs are grouped.
+fn to_log(state: State, entry: logger.Entry) -> envelope.Log {
+  let trace_id = case meta.get(entry.meta, "request_id") {
+    Ok(meta.String(id)) ->
+      case string.length(id) == 32 {
+        True -> id
+        False -> state.settings.trace_id
+      }
+    _ -> state.settings.trace_id
+  }
+  let level = case entry.level {
+    logger.Debug -> envelope.Debug
+    logger.Info -> envelope.Info
+    logger.Warning -> envelope.Warning
+    logger.Error -> envelope.Error
+  }
+  envelope.Log(
+    at: entry.at,
+    level:,
+    body: entry.message,
+    trace_id:,
+    attributes: entry.meta,
+  )
 }
 
 fn limited(state: State, now: Timestamp) -> Bool {
@@ -151,10 +230,17 @@ fn enqueue(
   event: Event,
   now: Timestamp,
 ) -> #(State, List(Effect)) {
+  enqueue_request(state, envelope.envelope(state.settings.dsn, event, now), now)
+}
+
+fn enqueue_request(
+  state: State,
+  request: Request(String),
+  now: Timestamp,
+) -> #(State, List(Effect)) {
   case limited(state, now) {
     True -> #(state, [])
     False -> {
-      let request = envelope.envelope(state.settings.dsn, event, now)
       let #(pending, count) = case
         state.pending_count >= state.settings.max_queue
       {

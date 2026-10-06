@@ -14,7 +14,8 @@
 //// A failed `tracer.Span` becomes a Sentry exception grouped by its
 //// `source.name`; an `Error` or `Warning` `tracer.Point` becomes a message
 //// event; everything else the tracer sees is kept as a breadcrumb and
-//// attached to the next event. Sending happens in a separate process, so
+//// attached to the next event. `logger(sentry)` is a log channel that
+//// sends entries to Sentry Logs. Sending happens in a separate process, so
 //// the handler and `capture` cost one message send and never block.
 ////
 //// ## Sending
@@ -47,6 +48,7 @@ import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import gleam/string
 import gleam/time/timestamp
+import gloss/logger.{type Logger}
 import gloss/meta.{type Meta}
 import gloss/tracer
 import gloss_sentry/internal/dsn.{type Dsn, type DsnError}
@@ -162,6 +164,18 @@ pub fn handler(sentry: Sentry) -> tracer.Handler {
   fn(event) { try_send(sentry.subject, engine.Traced(event)) }
 }
 
+/// A log channel that sends entries to Sentry Logs. Entries are batched:
+/// up to 100 go out together, at most five seconds after the first one
+/// arrives. An entry with a 32-character `request_id` in its meta uses it
+/// as the Sentry trace id, so a request's logs are grouped together.
+///
+/// ```gleam
+/// let log = logger.stack([logger.stderr(), gloss_sentry.logger(sentry)])
+/// ```
+pub fn logger(sentry: Sentry) -> Logger {
+  logger.new(fn(entry) { try_send(sentry.subject, engine.Logged(entry)) })
+}
+
 /// Report a handled problem as an error-level message event.
 pub fn capture(sentry: Sentry, message: String, meta: Meta) -> Nil {
   try_send(
@@ -211,6 +225,7 @@ fn start_actor(
       server_name: option.unwrap(config.server_name, node_name()),
       max_queue: config.max_queue,
       breadcrumbs: config.breadcrumbs,
+      trace_id: event_id(),
     )
   let send = fn(request) { send(request) |> result.map_error(string.inspect) }
   let builder =
@@ -262,6 +277,10 @@ fn step(shell: Shell, message: Message) -> actor.Next(Shell, Message) {
 
 fn perform(shell: Shell, effect: engine.Effect) -> Shell {
   case effect {
+    engine.ScheduleFlush(after_ms:) -> {
+      process.send_after(shell.subject, after_ms, engine.FlushLogs)
+      shell
+    }
     engine.Post(request) -> {
       let inbox = shell.subject
       let send = shell.send

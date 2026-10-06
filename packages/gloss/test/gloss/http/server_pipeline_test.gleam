@@ -99,7 +99,7 @@ pub fn request_id_test() {
   let generated =
     server.handle(builder, request(http.Get, "/notes/1"))
     |> header("x-request-id")
-  string.length(generated) |> should.equal(16)
+  string.length(generated) |> should.equal(32)
 }
 
 pub fn server_middleware_wraps_unmatched_requests_test() {

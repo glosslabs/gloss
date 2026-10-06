@@ -25,6 +25,7 @@ gloss_sentry.capture(sentry, "payment declined", [#("order", meta.String(id))])
 | `Point` at `Error` or `Warning` | Message event at that level |
 | Everything else | Kept as a breadcrumb for the next event |
 | `capture` / `capture_error` | Message or exception event from the application |
+| Entries written to `gloss_sentry.logger(sentry)` | Sentry Logs, batched up to 100 per envelope or every 5 seconds |
 
 Sending happens in its own process. The tracer handler and `capture` cost one
 message send and never block or panic. One envelope is in flight at a time;

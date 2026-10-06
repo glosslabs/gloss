@@ -162,3 +162,20 @@ pub fn named_sender_test() {
   gloss_sentry.handler(early)(span_error("after stop"))
   process.receive(seen, 100) |> should.equal(Error(Nil))
 }
+
+pub fn logger_sends_a_full_batch_test() {
+  let seen = process.new_subject()
+  let assert Ok(sentry) =
+    gloss_sentry.config(dsn_text) |> gloss_sentry.start(fake_send(seen, ok_200))
+  let log = gloss_sentry.logger(sentry)
+  list.repeat(Nil, 100) |> list.each(fn(_) { log.info("hello", []) })
+  let assert Ok(request) = process.receive(seen, 1000)
+  at(
+    payload(request),
+    ["items"],
+    decode.list(decode.at(["body"], decode.string)),
+  )
+  |> list.length
+  |> should.equal(100)
+  gloss_sentry.stop(sentry)
+}
