@@ -18,7 +18,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project: [packages/gloss, packages/gloss_sentry, template]
+        project:
+          [
+            packages/gloss,
+            packages/gloss_sentry,
+            template,
+            examples/json_api,
+          ]
     defaults:
       run:
         working-directory: ${{ matrix.project }}

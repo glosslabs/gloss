@@ -1,0 +1,161 @@
+-module(gloss@http@server_ffi).
+
+-export([listen/3, port/1, accept/1, controlling_process/2, close/1, send/2,
+         next/2, read_body/3, drain_requested/0, request_drain/1, await_go/0,
+         go/1, rescue/1, random_id/0, http_date/0]).
+
+%% --- Sockets ----------------------------------------------------------------
+
+%% Listen in `http_bin` packet mode, passive. Accepted sockets inherit the
+%% options. `packet_size` bounds the request line and each header line.
+listen(Interface, Port, Backlog) ->
+    case inet:parse_address(binary_to_list(Interface)) of
+        {error, _} ->
+            {error, invalid_interface};
+        {ok, Address} ->
+            Family = case tuple_size(Address) of 4 -> inet; 8 -> inet6 end,
+            Options = [binary, Family, {ip, Address}, {packet, http_bin},
+                       {packet_size, 16384}, {active, false},
+                       {reuseaddr, true}, {nodelay, true},
+                       {backlog, Backlog}, {send_timeout, 30000},
+                       {send_timeout_close, true}],
+            case gen_tcp:listen(Port, Options) of
+                {ok, Socket} -> {ok, Socket};
+                {error, eaddrinuse} -> {error, address_in_use};
+                {error, Reason} -> {error, {other, describe(Reason)}}
+            end
+    end.
+
+port(Socket) ->
+    {ok, Port} = inet:port(Socket),
+    Port.
+
+accept(Listen) ->
+    case gen_tcp:accept(Listen) of
+        {ok, Socket} -> {ok, Socket};
+        {error, closed} -> {error, closed};
+        {error, Reason} -> {error, {failed, describe(Reason)}}
+    end.
+
+controlling_process(Socket, Pid) ->
+    _ = gen_tcp:controlling_process(Socket, Pid),
+    nil.
+
+close(Socket) ->
+    _ = gen_tcp:close(Socket),
+    nil.
+
+send(Socket, Data) ->
+    case gen_tcp:send(Socket, Data) of
+        ok -> {ok, nil};
+        {error, _} -> {error, nil}
+    end.
+
+%% Wait for the next request-line or header packet, a drain request, or the
+%% timeout, whichever comes first. The socket is armed for one packet.
+next(Socket, Timeout) ->
+    _ = inet:setopts(Socket, [{active, once}]),
+    receive
+        {http, Socket, {http_request, Method, Uri, Version}} ->
+            {request_line, to_binary(Method), target(Uri), Version};
+        {http, Socket, {http_header, _, Name, _, Value}} ->
+            {header, string:lowercase(to_binary(Name)), Value};
+        {http, Socket, http_eoh} ->
+            end_of_headers;
+        {http, Socket, {http_error, Line}} ->
+            {bad_request, to_binary(Line)};
+        {tcp_closed, Socket} ->
+            connection_closed;
+        {tcp_error, Socket, _} ->
+            connection_closed;
+        gloss_http_drain ->
+            drain
+    after Timeout ->
+        timeout
+    end.
+
+%% Read exactly `Length` body bytes, then return to header parsing for the
+%% next request on the connection.
+read_body(_Socket, 0, _Timeout) ->
+    {ok, <<>>};
+read_body(Socket, Length, Timeout) ->
+    ok = inet:setopts(Socket, [{packet, raw}]),
+    Result = gen_tcp:recv(Socket, Length, Timeout),
+    _ = inet:setopts(Socket, [{packet, http_bin}]),
+    case Result of
+        {ok, Body} -> {ok, Body};
+        {error, _} -> {error, nil}
+    end.
+
+target({abs_path, Path}) -> Path;
+target({absoluteURI, _Scheme, _Host, _Port, Path}) -> Path;
+target('*') -> <<"*">>;
+target({scheme, _, Rest}) -> to_binary(Rest);
+target(Other) -> to_binary(Other).
+
+%% --- Process coordination ---------------------------------------------------
+
+%% Whether a drain request is waiting, consuming it.
+drain_requested() ->
+    receive gloss_http_drain -> true after 0 -> false end.
+
+request_drain(Pid) ->
+    Pid ! gloss_http_drain,
+    nil.
+
+%% A connection process waits for this before touching its socket, so the
+%% acceptor can hand the socket over first.
+await_go() ->
+    receive gloss_http_go -> nil end.
+
+go(Pid) ->
+    Pid ! gloss_http_go,
+    nil.
+
+%% --- Handlers ---------------------------------------------------------------
+
+%% Run a handler, turning any exception into a one-line description.
+rescue(F) ->
+    try
+        {ok, F()}
+    catch
+        Class:Reason:Stack -> {error, describe_exception(Class, Reason, Stack)}
+    end.
+
+describe_exception(_, #{gleam_error := _, message := Message, module := Module,
+                        function := Function, line := Line}, _) ->
+    iolist_to_binary([Message, " (", Module, ".", Function, ":",
+                      integer_to_binary(Line), ")"]);
+describe_exception(Class, Reason, [{Module, Function, Arity, Location} | _]) ->
+    Where = case proplists:get_value(line, Location) of
+        undefined -> io_lib:format("~s:~s/~p", [Module, Function, arity(Arity)]);
+        Line -> io_lib:format("~s:~s/~p:~p", [Module, Function, arity(Arity), Line])
+    end,
+    iolist_to_binary(io_lib:format("~p: ~0p (~s)", [Class, Reason, Where]));
+describe_exception(Class, Reason, _) ->
+    iolist_to_binary(io_lib:format("~p: ~0p", [Class, Reason])).
+
+arity(Args) when is_list(Args) -> length(Args);
+arity(Arity) -> Arity.
+
+%% 16 lowercase hex characters.
+random_id() ->
+    string:lowercase(binary:encode_hex(crypto:strong_rand_bytes(8))).
+
+%% An IMF-fixdate for the `date` header, e.g. `Tue, 06 Oct 2026 12:00:00 GMT`.
+http_date() ->
+    {{Y, Mo, D} = Date, {H, Mi, S}} = calendar:universal_time(),
+    Day = element(calendar:day_of_the_week(Date),
+                  {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}),
+    Month = element(Mo, {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul",
+                         "Aug", "Sep", "Oct", "Nov", "Dec"}),
+    iolist_to_binary(io_lib:format("~s, ~2..0w ~s ~4..0w ~2..0w:~2..0w:~2..0w GMT",
+                                   [Day, D, Month, Y, H, Mi, S])).
+
+%% --- Helpers ----------------------------------------------------------------
+
+to_binary(Value) when is_binary(Value) -> Value;
+to_binary(Value) when is_atom(Value) -> atom_to_binary(Value);
+to_binary(Value) when is_list(Value) -> unicode:characters_to_binary(Value).
+
+describe(Reason) -> iolist_to_binary(io_lib:format("~0p", [Reason])).
