@@ -3,6 +3,7 @@
 -export([listen/3, port/1, accept/1, controlling_process/2, close/1, send/2,
          sendfile/4, read_range/3, file_info/1, priv_dir/1, read_line/2,
          sha1/1, unmask/2, arm_raw/1, is_drain/1, http_date/1, pdict_get/1,
+         gzip/1, gzip_open/0, gzip_chunk/2, gzip_finish/1,
          next/2, read_body/3, drain_requested/0, request_drain/1, await_go/0,
          go/1, rescue/1, http_date/0]).
 
@@ -264,3 +265,22 @@ to_binary(Value) when is_atom(Value) -> atom_to_binary(Value);
 to_binary(Value) when is_list(Value) -> unicode:characters_to_binary(Value).
 
 describe(Reason) -> iolist_to_binary(io_lib:format("~0p", [Reason])).
+
+%% --- Compression --------------------------------------------------------------
+
+gzip(Data) -> zlib:gzip(Data).
+
+%% A streaming gzip compressor: a zlib port owned by the calling process.
+gzip_open() ->
+    Z = zlib:open(),
+    ok = zlib:deflateInit(Z, default, deflated, 31, 8, default),
+    Z.
+
+%% Compress a piece and flush it, so the client can decode it at once.
+gzip_chunk(Z, Data) -> iolist_to_binary(zlib:deflate(Z, Data, sync)).
+
+gzip_finish(Z) ->
+    Last = iolist_to_binary(zlib:deflate(Z, <<>>, finish)),
+    _ = zlib:deflateEnd(Z),
+    _ = zlib:close(Z),
+    Last.

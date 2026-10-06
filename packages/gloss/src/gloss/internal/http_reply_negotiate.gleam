@@ -101,3 +101,31 @@ fn parse_q(value: String) -> Result(Float, Nil) {
     _, _ -> Error(Nil)
   }
 }
+
+/// Whether an `accept-encoding` header allows `coding` (e.g. `"gzip"`),
+/// by its own quality or else that of `*`. No header means only `identity`.
+pub fn accepts_encoding(header: Result(String, Nil), coding: String) -> Bool {
+  case header {
+    Error(Nil) -> False
+    Ok(header) -> {
+      let codings =
+        header
+        |> string.split(",")
+        |> list.filter_map(fn(part) {
+          case string.split(part, ";") {
+            [name, ..params] ->
+              case string.lowercase(string.trim(name)) {
+                "" -> Error(Nil)
+                name -> Ok(#(name, q(params)))
+              }
+            [] -> Error(Nil)
+          }
+        })
+      case list.key_find(codings, coding), list.key_find(codings, "*") {
+        Ok(q), _ -> q >. 0.0
+        Error(Nil), Ok(q) -> q >. 0.0
+        Error(Nil), Error(Nil) -> False
+      }
+    }
+  }
+}

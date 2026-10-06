@@ -181,6 +181,38 @@ pub fn if_range_test() {
   with_if_range("\"stale\"") |> should.equal(200)
 }
 
+pub fn precompressed_copies_test() {
+  let dir = site()
+  write(dir <> "/app.css.gz", "GZIP")
+  write(dir <> "/app.css.br", "BROTLI")
+  let config = static.new(dir) |> static.precompressed(True)
+  let get = fn(accept) {
+    server.handle(
+      builder(config),
+      request(http.Get, "/assets/app.css")
+        |> request.set_header("accept-encoding", accept),
+    )
+  }
+
+  let res = get("gzip, br")
+  rendered_body(res) |> should.equal("BROTLI")
+  header(res, "content-encoding") |> should.equal("br")
+  header(res, "content-type") |> should.equal("text/css; charset=utf-8")
+  header(res, "vary") |> should.equal("accept-encoding")
+
+  let res = get("gzip")
+  rendered_body(res) |> should.equal("GZIP")
+  header(res, "content-encoding") |> should.equal("gzip")
+
+  let res = get("identity")
+  rendered_body(res) |> should.equal("body{}")
+  header(res, "content-encoding") |> should.equal("")
+  header(res, "vary") |> should.equal("accept-encoding")
+
+  // Each version has its own ETag.
+  should.not_equal(header(get("br"), "etag"), header(get(""), "etag"))
+}
+
 pub fn content_type_test() {
   static.content_type("a/b/logo.SVG") |> should.equal("image/svg+xml")
   static.content_type("Makefile") |> should.equal("application/octet-stream")

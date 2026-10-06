@@ -40,15 +40,26 @@ import gleam/result
 import gleam/string
 import gloss/http/context.{type Context, type Handler}
 import gloss/http/reply.{type Request, type Response}
+import gloss/internal/http_reply_negotiate as negotiate
 
 pub opaque type Config {
-  Config(directory: String, cache_control: String, param: String)
+  Config(
+    directory: String,
+    cache_control: String,
+    param: String,
+    precompressed: Bool,
+  )
 }
 
 /// Serve files under `directory`, with `cache-control: no-cache`, from the
 /// route's `*path` wildcard.
 pub fn new(directory: String) -> Config {
-  Config(directory:, cache_control: "no-cache", param: "path")
+  Config(
+    directory:,
+    cache_control: "no-cache",
+    param: "path",
+    precompressed: False,
+  )
 }
 
 pub fn cache_control(config: Config, value: String) -> Config {
@@ -58,6 +69,13 @@ pub fn cache_control(config: Config, value: String) -> Config {
 /// The name of the route's wildcard, when it isn't `path`.
 pub fn param(config: Config, name: String) -> Config {
   Config(..config, param: name)
+}
+
+/// Serve `file.br` or `file.gz`, when it exists and the client accepts
+/// that encoding, in place of `file`. Build the compressed copies when the
+/// assets are built, e.g. with `brotli` and `gzip -k`.
+pub fn precompressed(config: Config, enabled: Bool) -> Config {
+  Config(..config, precompressed: enabled)
 }
 
 /// `handler(new(directory))`.
@@ -81,15 +99,26 @@ pub fn priv(name: String) -> Result(String, Nil) {
 }
 
 fn serve(req: Request, config: Config, path: String) -> Response {
-  case file_info(path) {
+  let #(file_path, encoding) = variant(req, config, path)
+  let media_type = content_type(path)
+  case file_info(file_path) {
     Ok(#(size, mtime)) -> {
+      let suffix = case encoding {
+        Ok(encoding) -> "-" <> encoding
+        Error(Nil) -> ""
+      }
       let etag =
-        "\"" <> int.to_base16(size) <> "-" <> int.to_base16(mtime) <> "\""
+        "\""
+        <> int.to_base16(size)
+        <> "-"
+        <> int.to_base16(mtime)
+        <> suffix
+        <> "\""
       let last_modified = http_date(mtime)
       let file = fn(status, offset, length) {
         response.new(status)
-        |> response.set_body(reply.File(path:, offset:, length:))
-        |> response.set_header("content-type", content_type(path))
+        |> response.set_body(reply.File(path: file_path, offset:, length:))
+        |> response.set_header("content-type", media_type)
       }
       case fresh(req, etag), wanted_range(req, etag, last_modified, size) {
         True, _ -> reply.empty(304)
@@ -105,7 +134,7 @@ fn serve(req: Request, config: Config, path: String) -> Response {
               <> "/"
               <> int.to_string(size),
           )
-        False, Parts(ranges) -> multipart(path, size, ranges)
+        False, Parts(ranges) -> multipart(file_path, media_type, size, ranges)
         False, Unsatisfiable ->
           reply.error(416, "range not satisfiable")
           |> response.set_header(
@@ -117,8 +146,51 @@ fn serve(req: Request, config: Config, path: String) -> Response {
       |> response.set_header("last-modified", last_modified)
       |> response.set_header("accept-ranges", "bytes")
       |> response.set_header("cache-control", config.cache_control)
+      |> encoded(encoding, config.precompressed)
     }
     Error(Nil) -> reply.not_found()
+  }
+}
+
+/// The file to send, and its `content-encoding` when it is a compressed
+/// copy. Brotli is preferred to gzip.
+fn variant(
+  req: Request,
+  config: Config,
+  path: String,
+) -> #(String, Result(String, Nil)) {
+  let accepted = request.get_header(req, "accept-encoding")
+  case config.precompressed {
+    False -> #(path, Error(Nil))
+    True ->
+      [#("br", ".br"), #("gzip", ".gz")]
+      |> list.find_map(fn(candidate) {
+        let #(encoding, extension) = candidate
+        case negotiate.accepts_encoding(accepted, encoding) {
+          True ->
+            case file_info(path <> extension) {
+              Ok(_) -> Ok(#(path <> extension, Ok(encoding)))
+              Error(Nil) -> Error(Nil)
+            }
+          False -> Error(Nil)
+        }
+      })
+      |> result.unwrap(#(path, Error(Nil)))
+  }
+}
+
+fn encoded(
+  res: Response,
+  encoding: Result(String, Nil),
+  precompressed: Bool,
+) -> Response {
+  let res = case encoding {
+    Ok(encoding) -> response.set_header(res, "content-encoding", encoding)
+    Error(Nil) -> res
+  }
+  case precompressed {
+    True -> response.set_header(res, "vary", "accept-encoding")
+    False -> res
   }
 }
 
@@ -240,7 +312,12 @@ fn overlapping(ranges: List(#(Int, Int))) -> Bool {
 
 /// A `206` whose body is each range as its own part, with its own
 /// `content-range`.
-fn multipart(path: String, size: Int, ranges: List(#(Int, Int))) -> Response {
+fn multipart(
+  path: String,
+  media_type: String,
+  size: Int,
+  ranges: List(#(Int, Int)),
+) -> Response {
   let boundary = random_boundary()
   let size_text = int.to_string(size)
   let segments =
@@ -251,7 +328,7 @@ fn multipart(path: String, size: Int, ranges: List(#(Int, Int))) -> Response {
           "--"
           <> boundary
           <> "\r\ncontent-type: "
-          <> content_type(path)
+          <> media_type
           <> "\r\ncontent-range: bytes "
           <> int.to_string(first)
           <> "-"
