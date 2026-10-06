@@ -70,6 +70,8 @@ pub fn show(_req: Request, ctx: Context(App)) -> Response {
 | `gloss/http/reply` | `Request`/`Response`/`Body` types, `json`, `text`, `html`, `bytes`, `stream`, `empty`, error replies (`error`, `problem`, `not_found`, …), `preferred` |
 | `gloss/http/body` | Read bodies on demand: `json`, `text`, `bits`, `form` (urlencoded or multipart; up to `max_body`), or `stream`/`fold` for large uploads; gzipped bodies are inflated |
 | `gloss/http/multipart` | Stream `multipart/form-data` uploads part by part |
+| `gloss/http/query` | Query parameters: `get`, `get_all`, `all`, and `string`/`int`/`optional_int` that answer `400` |
+| `gloss/http/cors` | Cross-origin resource sharing middleware, with preflight handling |
 | `gloss/http/cookie` | `get`, `all`, `set`, `delete`, with secure `defaults()` |
 | `gloss/http/session` | Server-side sessions: `load`, `get`/`set`/`remove`, `save`, `regenerate`, `destroy`, over a pluggable `Store` |
 | `gloss/http/session/memory` | The default store: an ETS table swept of expired sessions every minute |
