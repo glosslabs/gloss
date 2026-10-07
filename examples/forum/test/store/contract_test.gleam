@@ -6,7 +6,6 @@ import domain/accounts/user_store.{Inserted, NewUser}
 import envoy
 import gleam/time/timestamp
 import gloss/sql
-import gloss/store
 import gloss/tracer
 import store/threads as postgres_threads
 import store/users as postgres_users
@@ -24,14 +23,14 @@ pub fn memory_threads_test() {
 
 pub fn postgres_users_test() {
   use db <- with_database
-  let assert Ok(users) = postgres_users.new(db) |> store.start
+  let users = postgres_users.new(db)
   contract.users(users)
 }
 
 pub fn postgres_threads_test() {
   use db <- with_database
-  let assert Ok(users) = postgres_users.new(db) |> store.start
-  let assert Ok(threads) = postgres_threads.new(db) |> store.start
+  let users = postgres_users.new(db)
+  let threads = postgres_threads.new(db)
   // Posts reference real users.
   let author = user(users, "author@x")
   let other = user(users, "other@x")

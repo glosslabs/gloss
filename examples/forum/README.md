@@ -60,8 +60,9 @@ Each aggregate has a store port in its domain: a message type, such as
 store process answers, built on `gloss/store`. The domain services keep the
 rules (validating input, hashing passwords, deciding timestamps) and send
 messages for storage. `store/users` and `store/threads` answer them
-with SQL from a `store.concurrent` store, each message in a process of its
-own so statements run in parallel on the pool. The tests answer the same
+with SQL from a `store.inline` store, which runs in the calling process:
+the pool already runs statements in parallel, and nothing is copied
+between processes. The tests answer the same
 messages from memory with `store.serial` (`test/support/memory_*`), and
 `test/support/store_contract` checks that both behave the same.
 

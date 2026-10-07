@@ -10,13 +10,12 @@ import gleam/list
 import gleam/option.{type Option}
 import gleam/result
 import gloss/sql
-import gloss/store
+import gloss/store.{type Store}
 
-/// The store, ready to `store.start` or `store.supervised`. Each message is
-/// answered in a process of its own, so statements run in parallel on the
-/// pool's connections.
-pub fn new(db: sql.Db) -> store.Builder(Message) {
-  store.concurrent(fn(message) {
+/// The store. It answers in the calling process, so the caller borrows the
+/// pool connection and results are never copied between processes.
+pub fn new(db: sql.Db) -> Store(Message) {
+  store.inline(fn(message) {
     case message {
       Insert(user:, reply:) -> insert(db, user) |> store.reply(reply)
       Get(id:, reply:) -> get(db, id) |> store.reply(reply)
