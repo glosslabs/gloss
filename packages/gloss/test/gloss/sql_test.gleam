@@ -76,6 +76,19 @@ pub fn arg_numbers_placeholders_after_bound_values_test() {
     ])
 }
 
+pub fn borrow_lends_the_drivers_connection_test() {
+  let #(db, log) = start(1)
+  let raw = fn(db) {
+    sql.borrow(db, "raw", fn(connection, _timeout) {
+      decode.run(connection.raw, decode.string)
+      |> result.replace_error(sql.NotFound)
+    })
+  }
+  assert raw(db) == Ok("fake")
+  let assert Ok(Ok("fake")) = sql.transaction(db, fn(tx) { Ok(raw(tx)) })
+  assert fake.drain(log) == ["connect", "BEGIN", "COMMIT"]
+}
+
 pub fn nullable_maps_none_to_null_test() {
   assert sql.nullable(Some(3), sql.Int) == sql.Int(3)
   assert sql.nullable(None, sql.Int) == sql.Null

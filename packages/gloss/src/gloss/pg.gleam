@@ -41,17 +41,53 @@
 //// `NotNullViolation` and `23514` `CheckViolation`. Others are
 //// `QueryFailed` with the SQLSTATE as the code.
 ////
-//// Statements are parsed on every run; there is no prepared statement
-//// cache yet. `LISTEN`/`NOTIFY` and `COPY` are not supported.
+//// ## Prepared statements
+////
+//// Each connection keeps up to 100 prepared statements by SQL text (see
+//// `statement_cache`), so a statement is parsed once per connection and
+//// after that only bound and run. The least recently used ones are closed
+//// when the cache is full. Statements built with `sql.arg` and `sql.when`
+//// produce one SQL text per combination of parts, and each is cached
+//// separately.
+////
+//// ## LISTEN and NOTIFY
+////
+//// `notify` is a statement, so it can run in a transaction, and Postgres
+//// delivers it on commit. Receiving needs a connection of its own:
+////
+//// ```gleam
+//// let assert Ok(listener) = pg.start_listener(config)
+//// let jobs = process.new_subject()
+//// let assert Ok(Nil) = pg.listen(listener, "jobs", jobs)
+//// let assert Ok(Nil) = sql.exec(db, pg.notify("jobs", "42"))
+//// let assert Ok(pg.Notification(channel: "jobs", payload: "42", ..)) =
+////   process.receive(jobs, 1000)
+//// ```
+////
+//// If the listener's connection drops it reconnects, with backoff, and
+//// listens again. Notifications sent while it was disconnected are lost,
+//// so treat one as a hint to go and read the table, not as the data.
+////
+//// ## COPY
+////
+//// `copy_in` streams rows into `COPY ... FROM STDIN` and `copy_out` reads
+//// `COPY ... TO STDOUT`, both on a connection from the pool (or the
+//// transaction's). `copy_row` writes a row in COPY's text format.
 
+import gleam/dynamic.{type Dynamic}
+import gleam/erlang/process.{type Name, type Subject}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/otp/actor
+import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import gleam/string
 import gleam/time/duration.{type Duration}
 import gleam/uri
-import gloss/internal/pg_connection as connection
+import gloss/internal/pg_codec as codec
+import gloss/internal/pg_connection.{type PgConnection} as connection
+import gloss/internal/pg_listener
 import gloss/sql
 
 /// Where and how to connect. Build one with `new` or `from_url` and the
@@ -67,6 +103,7 @@ pub opaque type Config {
     application_name: String,
     connect_timeout: Duration,
     parameters: List(#(String, String)),
+    statement_cache: Int,
   )
 }
 
@@ -95,6 +132,7 @@ pub fn new() -> Config {
     application_name: "gloss",
     connect_timeout: duration.seconds(5),
     parameters: [],
+    statement_cache: 100,
   )
 }
 
@@ -209,42 +247,58 @@ pub fn parameter(config: Config, name: String, value: String) -> Config {
   Config(..config, parameters: list.append(config.parameters, [#(name, value)]))
 }
 
+/// How many prepared statements each connection keeps. `0` turns the
+/// cache off, so every statement is parsed each time it runs, which suits
+/// a connection pooler such as PgBouncer in transaction mode.
+pub fn statement_cache(config: Config, size: Int) -> Config {
+  Config(..config, statement_cache: int.max(size, 0))
+}
+
 /// The driver to give to `sql.new`.
 pub fn driver(config: Config) -> sql.Driver {
-  let settings =
-    connection.Settings(
-      host: config.host,
-      port: config.port,
-      user: config.user,
-      password: config.password,
-      database: config.database,
-      tls: case config.ssl {
-        SslDisabled -> connection.NoTls
-        SslPreferred -> connection.PreferTls
-        SslRequired -> connection.RequireTls
-        SslVerified -> connection.VerifyTls
-      },
-      connect_timeout: duration.to_milliseconds(config.connect_timeout),
-      parameters: [
-        #("application_name", config.application_name),
-        ..list.filter(config.parameters, fn(p) { !fixed(p.0) })
-      ],
-    )
+  let settings = settings(config)
   sql.Driver(
     name: "postgres",
     placeholder: fn(n) { "$" <> int.to_string(n) },
     connect: fn() {
-      use socket <- result.map(connection.connect(settings))
+      use connection <- result.map(connection.open(
+        settings,
+        config.statement_cache,
+      ))
       sql.Connection(
         run: fn(text, args, timeout) {
-          connection.run(socket, text, args, timeout)
+          connection.run(connection, text, args, timeout)
         },
-        script: fn(text, timeout) { connection.script(socket, text, timeout) },
-        alive: fn() { connection.alive(socket) },
-        transfer: fn(pid) { connection.transfer(socket, pid) },
-        close: fn() { connection.close(socket) },
+        script: fn(text, timeout) {
+          connection.script(connection, text, timeout)
+        },
+        alive: fn() { connection.alive(connection) },
+        transfer: fn(pid) { connection.transfer(connection, pid) },
+        close: fn() { connection.close(connection) },
+        raw: coerce(connection),
       )
     },
+  )
+}
+
+fn settings(config: Config) -> connection.Settings {
+  connection.Settings(
+    host: config.host,
+    port: config.port,
+    user: config.user,
+    password: config.password,
+    database: config.database,
+    tls: case config.ssl {
+      SslDisabled -> connection.NoTls
+      SslPreferred -> connection.PreferTls
+      SslRequired -> connection.RequireTls
+      SslVerified -> connection.VerifyTls
+    },
+    connect_timeout: duration.to_milliseconds(config.connect_timeout),
+    parameters: [
+      #("application_name", config.application_name),
+      ..list.filter(config.parameters, fn(p) { !fixed(p.0) })
+    ],
   )
 }
 
@@ -255,3 +309,172 @@ fn fixed(name: String) -> Bool {
     _ -> False
   }
 }
+
+// --- NOTIFY ------------------------------------------------------------------
+
+/// Send `payload` to every listener on `channel`. Run it with `sql.exec`;
+/// in a transaction it is delivered when the transaction commits.
+pub fn notify(channel: String, payload: String) -> sql.Statement(Dynamic) {
+  sql.query("select pg_notify($1, $2)")
+  |> sql.bind(sql.Text(channel))
+  |> sql.bind(sql.Text(payload))
+  |> sql.label("notify")
+}
+
+// --- LISTEN ------------------------------------------------------------------
+
+/// A notification, as delivered to the subjects given to `listen`.
+pub type Notification {
+  Notification(
+    channel: String,
+    payload: String,
+    /// The process id of the server backend that sent it.
+    sender: Int,
+  )
+}
+
+/// A connection dedicated to receiving notifications.
+pub opaque type Listener {
+  Listener(subject: Subject(ListenerMessage))
+}
+
+/// The listener process's messages, for naming it with `process.new_name`.
+pub type ListenerMessage =
+  pg_listener.Message(Notification)
+
+/// Open a listener's connection and start it, linked to the calling
+/// process. Fails if the connection can't be opened.
+pub fn start_listener(config: Config) -> Result(Listener, sql.Error) {
+  case pg_listener.start(settings(config), Notification, None) {
+    Ok(started) -> Ok(Listener(started.data))
+    Error(actor.InitFailed(reason)) -> Error(sql.ConnectionFailed(reason))
+    Error(error) -> Error(sql.ConnectionFailed(string.inspect(error)))
+  }
+}
+
+/// A listener for a supervision tree, registered under `name`; reach it
+/// with `listener_from_name`. Subscriptions don't survive a restart: listen
+/// again after one.
+pub fn supervised_listener(
+  config: Config,
+  name: Name(ListenerMessage),
+) -> ChildSpecification(Listener) {
+  supervision.worker(fn() {
+    pg_listener.start(settings(config), Notification, Some(name))
+    |> result.map(fn(started) {
+      actor.Started(..started, data: Listener(started.data))
+    })
+  })
+}
+
+pub fn listener_from_name(name: Name(ListenerMessage)) -> Listener {
+  Listener(process.named_subject(name))
+}
+
+/// Send each notification on `channel` to `subject` until `unlisten`, or
+/// until the subject's owner exits. The first subscriber to a channel makes
+/// the listener run `LISTEN`; while it is reconnecting the subscription is
+/// recorded and takes effect once it is back.
+pub fn listen(
+  listener: Listener,
+  channel: String,
+  subject: Subject(Notification),
+) -> Result(Nil, sql.Error) {
+  process.call(listener.subject, 10_000, pg_listener.Listen(channel, subject, _))
+}
+
+/// Stop sending notifications on `channel` to `subject`.
+pub fn unlisten(
+  listener: Listener,
+  channel: String,
+  subject: Subject(Notification),
+) -> Nil {
+  process.send(listener.subject, pg_listener.Unlisten(channel, subject))
+}
+
+/// Close the listener's connection and stop it.
+pub fn stop_listener(listener: Listener) -> Nil {
+  process.send(listener.subject, pg_listener.Stop)
+}
+
+// --- COPY --------------------------------------------------------------------
+
+/// Run `COPY ... FROM STDIN`, sending `chunks` as the data, and return how
+/// many rows were copied. Chunks needn't line up with rows.
+///
+/// ```gleam
+/// pg.copy_in(db, "copy items (name, qty) from stdin", [
+///   pg.copy_row([sql.Text("bolt"), sql.Int(40)]),
+///   pg.copy_row([sql.Text("nut"), sql.Null]),
+/// ])
+/// ```
+pub fn copy_in(
+  db: sql.Db,
+  sql: String,
+  chunks: List(BitArray),
+) -> Result(Int, sql.Error) {
+  copy_in_with(db, sql, chunks, fn(chunks) {
+    case chunks {
+      [chunk, ..rest] -> Some(#(chunk, rest))
+      [] -> None
+    }
+  })
+}
+
+/// `copy_in` for data too large to hold at once: `next` makes each chunk
+/// from `state` as it is needed, and `None` ends the copy.
+pub fn copy_in_with(
+  db: sql.Db,
+  sql: String,
+  from state: s,
+  next next: fn(s) -> Option(#(BitArray, s)),
+) -> Result(Int, sql.Error) {
+  use connection, timeout <- sql.borrow(db, "copy_in")
+  use connection <- result.try(from_raw(connection))
+  connection.copy_in(connection, sql, state, next, timeout)
+}
+
+/// Run `COPY ... TO STDOUT`, folding each chunk Postgres sends into `acc`.
+/// In the text and CSV formats each chunk is one row, ending in a newline.
+pub fn copy_out(
+  db: sql.Db,
+  sql: String,
+  from acc: a,
+  with fold: fn(a, BitArray) -> a,
+) -> Result(a, sql.Error) {
+  use connection, timeout <- sql.borrow(db, "copy_out")
+  use connection <- result.try(from_raw(connection))
+  connection.copy_out(connection, sql, acc, fold, timeout)
+}
+
+/// One row in COPY's text format: values separated by tabs, `\N` for
+/// NULL, ending in a newline.
+pub fn copy_row(values: List(sql.Value)) -> BitArray {
+  let fields =
+    list.map(values, fn(value) {
+      case value {
+        sql.Null -> "\\N"
+        _ ->
+          codec.to_text(value)
+          |> string.replace("\\", "\\\\")
+          |> string.replace("\n", "\\n")
+          |> string.replace("\r", "\\r")
+          |> string.replace("\t", "\\t")
+      }
+    })
+  <<string.join(fields, "\t"):utf8, "\n":utf8>>
+}
+
+fn from_raw(connection: sql.Connection) -> Result(PgConnection, sql.Error) {
+  ffi_connection(connection.raw)
+  |> result.replace_error(sql.QueryFailed(
+    code: "",
+    message: "not a Postgres connection",
+  ))
+}
+
+@external(erlang, "gloss@sql_ffi", "coerce")
+fn coerce(value: a) -> Dynamic
+
+@external(erlang, "gloss@pg_ffi", "pg_connection")
+fn ffi_connection(raw: Dynamic) -> Result(PgConnection, Nil)

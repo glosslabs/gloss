@@ -33,7 +33,8 @@ pub fn encode(value: Value) -> Option(#(Int, BitArray)) {
   }
 }
 
-fn to_text(value: Value) -> String {
+/// A value in Postgres's text form, as an argument or COPY field.
+pub fn to_text(value: Value) -> String {
   case value {
     sql.Null -> "NULL"
     sql.Bool(True) -> "t"

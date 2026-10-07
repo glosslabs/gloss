@@ -41,19 +41,39 @@ pub fn sasl_response(data: BitArray) -> BytesTree {
   message("p", data)
 }
 
-/// Parse into the unnamed statement, leaving every parameter's type to the
-/// server.
-pub fn parse(sql: String) -> BytesTree {
-  message("P", <<0, cstring(sql):bits, 0:16>>)
+/// Parse into the statement `name` (`""` for the unnamed one), leaving
+/// every parameter's type to the server.
+pub fn parse(name: String, sql: String) -> BytesTree {
+  message("P", <<cstring(name):bits, cstring(sql):bits, 0:16>>)
+}
+
+pub fn describe_statement(name: String) -> BytesTree {
+  message("D", <<"S":utf8, cstring(name):bits>>)
+}
+
+pub fn close_statement(name: String) -> BytesTree {
+  message("C", <<"S":utf8, cstring(name):bits>>)
+}
+
+pub fn copy_data(data: BitArray) -> BytesTree {
+  bytes_tree.from_bit_array(<<
+    "d":utf8,
+    { bit_array.byte_size(data) + 4 }:32,
+    data:bits,
+  >>)
+}
+
+pub fn copy_done() -> BytesTree {
+  message("c", <<>>)
 }
 
 /// A parameter: `None` for NULL, or its format (0 text, 1 binary) and bytes.
 pub type Parameter =
   Option(#(Int, BitArray))
 
-/// Bind the unnamed statement to the unnamed portal, asking for every result
+/// Bind the statement `name` to the unnamed portal, asking for every result
 /// column in text format.
-pub fn bind(parameters: List(Parameter)) -> BytesTree {
+pub fn bind(name: String, parameters: List(Parameter)) -> BytesTree {
   let count = list.length(parameters)
   let formats =
     list.fold(parameters, <<>>, fn(acc, parameter) {
@@ -75,7 +95,7 @@ pub fn bind(parameters: List(Parameter)) -> BytesTree {
     })
   message("B", <<
     0,
-    0,
+    cstring(name):bits,
     count:16,
     formats:bits,
     count:16,
@@ -127,7 +147,9 @@ pub type Message {
   Authentication(Authentication)
   ParameterStatus(name: String, value: String)
   BackendKeyData(process_id: Int, secret: BitArray)
-  ReadyForQuery
+  /// `status` is `I` when idle, `T` in a transaction and `E` in a failed
+  /// one.
+  ReadyForQuery(status: String)
   ParseComplete
   BindComplete
   NoData
@@ -138,6 +160,10 @@ pub type Message {
   ErrorResponse(fields: List(#(String, String)))
   NoticeResponse(fields: List(#(String, String)))
   CopyInResponse
+  CopyOutResponse
+  CopyData(data: BitArray)
+  CopyDone
+  NotificationResponse(process_id: Int, channel: String, payload: String)
   /// Any message the client has no use for, by its tag byte.
   Other(tag: Int)
 }
@@ -194,13 +220,26 @@ fn decode_body(tag: Int, body: BitArray) -> Result(Message, DecodeError) {
     0x4B, <<process_id:32, secret:bytes>> ->
       Ok(BackendKeyData(process_id:, secret:))
     // Z
-    0x5A, _ -> Ok(ReadyForQuery)
+    0x5A, <<status>> ->
+      bit_array.to_string(<<status>>)
+      |> result.map(ReadyForQuery)
+      |> result.replace_error(Malformed)
     // 1, 2, n, I, G
     0x31, _ -> Ok(ParseComplete)
     0x32, _ -> Ok(BindComplete)
     0x6E, _ -> Ok(NoData)
     0x49, _ -> Ok(EmptyQueryResponse)
     0x47, _ -> Ok(CopyInResponse)
+    // H, d, c
+    0x48, _ -> Ok(CopyOutResponse)
+    0x64, _ -> Ok(CopyData(body))
+    0x63, _ -> Ok(CopyDone)
+    // A
+    0x41, <<process_id:32, rest:bytes>> -> {
+      use #(channel, rest) <- result.try(read_cstring(rest))
+      use #(payload, _) <- result.map(read_cstring(rest))
+      NotificationResponse(process_id:, channel:, payload:)
+    }
     // T
     0x54, <<count:16, rest:bytes>> ->
       decode_columns(rest, count, []) |> result.map(RowDescription)
@@ -213,8 +252,9 @@ fn decode_body(tag: Int, body: BitArray) -> Result(Message, DecodeError) {
     // E, N
     0x45, _ -> decode_fields(body, []) |> result.map(ErrorResponse)
     0x4E, _ -> decode_fields(body, []) |> result.map(NoticeResponse)
-    // R, T, D, K with a short body.
-    0x52, _ | 0x54, _ | 0x44, _ | 0x4B, _ -> Error(Malformed)
+    // R, T, D, K, Z, A with a bad body.
+    0x52, _ | 0x54, _ | 0x44, _ | 0x4B, _ | 0x5A, _ | 0x41, _ ->
+      Error(Malformed)
     _, _ -> Ok(Other(tag))
   }
 }

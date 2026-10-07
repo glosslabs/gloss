@@ -203,6 +203,9 @@ pub type Connection {
     /// Make `pid` the owner of the connection, so it lives as long as `pid`.
     transfer: fn(Pid) -> Nil,
     close: fn() -> Nil,
+    /// The driver's own connection value, for driver-specific operations
+    /// run through `borrow`, such as Postgres's `COPY`.
+    raw: Dynamic,
   )
 }
 
@@ -506,6 +509,26 @@ pub fn script(db: Db, sql: String) -> Result(Nil, Error) {
   use <- traced(db, "script", fn() { describe_script(db, sql) }, fn(_) { 0 })
   use connection <- with_connection(db)
   connection.script(sql, db.query_timeout)
+}
+
+/// Run `work` on a connection: the transaction's, or one borrowed from the
+/// pool for its duration. `work` also gets the query timeout in
+/// milliseconds. This is for drivers that offer operations of their own
+/// (`pg.copy_in`, for example), which find their connection in `raw`;
+/// applications use the statement functions above. It is reported as a
+/// span named `name`.
+///
+/// If `work` fails with `QueryTimeout` or `ConnectionLost`, or panics, the
+/// connection is closed rather than reused.
+pub fn borrow(
+  db: Db,
+  name: String,
+  work: fn(Connection, Int) -> Result(a, Error),
+) -> Result(a, Error) {
+  let meta = fn() { [#("driver", meta.String(db.driver))] }
+  use <- traced(db, name, meta, fn(_) { 0 })
+  use connection <- with_connection(db)
+  work(connection, db.query_timeout)
 }
 
 fn describe_script(db: Db, sql: String) -> meta.Meta {

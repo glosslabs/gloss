@@ -4,6 +4,7 @@
 import gleam/bit_array
 import gleam/bytes_tree.{type BytesTree}
 import gleam/crypto
+import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Pid}
 import gleam/int
@@ -79,7 +80,7 @@ pub fn connect(settings: Settings) -> Result(Socket, sql.Error) {
   case opened {
     Ok(socket) -> Ok(socket)
     Error(error) -> {
-      close(socket)
+      close_socket(socket)
       Error(as_connection_failure(error))
     }
   }
@@ -214,7 +215,7 @@ fn md5_hex(data: BitArray) -> String {
 fn await_ready(reader: Reader) -> Result(Reader, sql.Error) {
   use #(message, reader) <- result.try(next(reader))
   case message {
-    protocol.ReadyForQuery -> Ok(reader)
+    protocol.ReadyForQuery(_) -> Ok(reader)
     protocol.ErrorResponse(fields) -> Error(server_error(fields))
     _ -> await_ready(reader)
   }
@@ -230,26 +231,140 @@ fn as_connection_failure(error: sql.Error) -> sql.Error {
 
 // --- Running statements ------------------------------------------------------
 
-/// Run one statement with arguments using the extended query protocol, in a
-/// single round trip.
+/// An open connection and its prepared statement cache, if it has one.
+pub type PgConnection {
+  PgConnection(socket: Socket, cache: Option(Cache))
+}
+
+/// Statements prepared on this connection, by SQL text. An ETS table, so
+/// whichever process has borrowed the connection can use it.
+pub type Cache
+
+/// Open a connection that keeps up to `cache_size` prepared statements.
+pub fn open(
+  settings: Settings,
+  cache_size: Int,
+) -> Result(PgConnection, sql.Error) {
+  use socket <- result.map(connect(settings))
+  let cache = case cache_size > 0 {
+    True -> Some(ffi_cache_new(cache_size))
+    False -> None
+  }
+  PgConnection(socket:, cache:)
+}
+
+/// What the server replied to one request, up to `ReadyForQuery`.
+type Reply {
+  Reply(
+    result: Result(sql.Outcome, sql.Error),
+    /// Whether a statement was parsed, so it exists on the server.
+    parsed: Bool,
+    /// Column types, from a row description.
+    types: List(Int),
+    /// `I`, `T` or `E`: see `protocol.ReadyForQuery`.
+    status: String,
+  )
+}
+
+/// Run one statement with arguments in a single round trip of the extended
+/// query protocol.
+///
+/// With a cache, a statement is parsed once per connection and then only
+/// bound and executed. A cached statement the server no longer accepts
+/// (dropped by `DEALLOCATE` or `DISCARD`, or whose result type changed
+/// with the schema) is parsed again, and run again when that is safe:
+/// outside a transaction, where the failed attempt changed nothing.
 pub fn run(
-  socket: Socket,
+  connection: PgConnection,
   sql: String,
   args: List(sql.Value),
   timeout: Int,
 ) -> Result(sql.Outcome, sql.Error) {
+  let PgConnection(socket:, cache:) = connection
+  use <- close_when_broken(socket)
+  let args = list.map(args, codec.encode)
+  case cache {
+    None -> {
+      let request = [
+        protocol.parse("", sql),
+        protocol.bind("", args),
+        protocol.describe_portal(),
+        protocol.execute(),
+        protocol.sync(),
+      ]
+      request_reply(socket, request, [], timeout)
+      |> result.try(fn(reply) { reply.result })
+    }
+    Some(cache) ->
+      case ffi_cache_lookup(cache, sql) {
+        Error(Nil) -> prepare_and_run(socket, cache, sql, args, timeout)
+        Ok(#(name, types)) -> {
+          let request =
+            list.append(closes(cache), [
+              protocol.bind(name, args),
+              protocol.execute(),
+              protocol.sync(),
+            ])
+          use reply <- result.try(request_reply(socket, request, types, timeout))
+          case reply.result {
+            Error(sql.QueryFailed(code:, ..))
+              if code == "0A000" || code == "26000"
+            -> {
+              ffi_cache_delete(cache, sql)
+              case reply.status {
+                "I" -> prepare_and_run(socket, cache, sql, args, timeout)
+                _ -> reply.result
+              }
+            }
+            result -> result
+          }
+        }
+      }
+  }
+}
+
+fn prepare_and_run(
+  socket: Socket,
+  cache: Cache,
+  sql: String,
+  args: List(protocol.Parameter),
+  timeout: Int,
+) -> Result(sql.Outcome, sql.Error) {
+  let name = ffi_cache_next_name(cache)
   let request =
-    bytes_tree.concat([
-      protocol.parse(sql),
-      protocol.bind(list.map(args, codec.encode)),
-      protocol.describe_portal(),
+    list.append(closes(cache), [
+      protocol.parse(name, sql),
+      protocol.describe_statement(name),
+      protocol.bind(name, args),
       protocol.execute(),
       protocol.sync(),
     ])
-  use <- close_when_broken(socket)
-  use Nil <- result.try(send(socket, request))
+  use reply <- result.try(request_reply(socket, request, [], timeout))
+  case reply.parsed {
+    True -> ffi_cache_put(cache, sql, name, reply.types)
+    False -> Nil
+  }
+  reply.result
+}
+
+/// Close messages for evicted statements, sent ahead of the next request.
+/// Closing a statement that doesn't exist is not an error.
+fn closes(cache: Cache) -> List(BytesTree) {
+  list.map(ffi_cache_take_closing(cache), protocol.close_statement)
+}
+
+fn request_reply(
+  socket: Socket,
+  request: List(BytesTree),
+  types: List(Int),
+  timeout: Int,
+) -> Result(Reply, sql.Error) {
+  use Nil <- result.try(send(socket, bytes_tree.concat(request)))
   let reader = Reader(socket:, buffer: <<>>, deadline: now_ms() + timeout)
-  collect(reader, [], [], 0, None)
+  collect(
+    reader,
+    Collected(types:, rows: [], affected: 0, error: None, parsed: False),
+  )
 }
 
 /// After a timeout or a broken read the server may still send replies, so
@@ -268,47 +383,51 @@ fn close_when_broken(
   result
 }
 
-/// Read the replies to one extended query up to `ReadyForQuery`. After an
-/// error the server skips to `ReadyForQuery`, which is still read so the
-/// connection stays usable.
-fn collect(
-  reader: Reader,
-  types: List(Int),
-  rows: List(List(sql.Value)),
-  affected: Int,
-  error: Option(sql.Error),
-) -> Result(sql.Outcome, sql.Error) {
+type Collected {
+  Collected(
+    types: List(Int),
+    rows: List(List(sql.Value)),
+    affected: Int,
+    error: Option(sql.Error),
+    parsed: Bool,
+  )
+}
+
+/// Read replies up to `ReadyForQuery`. After an error the server skips to
+/// `ReadyForQuery`, which is still read so the connection stays usable.
+fn collect(reader: Reader, acc: Collected) -> Result(Reply, sql.Error) {
   use #(message, reader) <- result.try(next(reader))
   case message {
+    protocol.ParseComplete -> collect(reader, Collected(..acc, parsed: True))
     protocol.RowDescription(columns) ->
       collect(
         reader,
-        list.map(columns, fn(c) { c.type_oid }),
-        rows,
-        affected,
-        error,
+        Collected(..acc, types: list.map(columns, fn(c) { c.type_oid })),
       )
     protocol.DataRow(values) -> {
-      let row = list.map2(types, values, decode_value)
-      collect(reader, types, [row, ..rows], affected, error)
+      let row = list.map2(acc.types, values, decode_value)
+      collect(reader, Collected(..acc, rows: [row, ..acc.rows]))
     }
     protocol.CommandComplete(tag) ->
-      collect(reader, types, rows, affected_rows(tag), error)
+      collect(reader, Collected(..acc, affected: affected_rows(tag)))
     protocol.ErrorResponse(fields) ->
-      collect(reader, types, rows, affected, Some(server_error(fields)))
+      collect(reader, Collected(..acc, error: Some(server_error(fields))))
     protocol.CopyInResponse -> {
       use Nil <- result.try(send(
         reader.socket,
-        protocol.copy_fail("COPY FROM STDIN is not supported"),
+        protocol.copy_fail("use pg.copy_in for COPY FROM STDIN"),
       ))
-      collect(reader, types, rows, affected, error)
+      collect(reader, acc)
     }
-    protocol.ReadyForQuery ->
-      case error {
+    protocol.ReadyForQuery(status) -> {
+      let result = case acc.error {
         Some(error) -> Error(error)
-        None -> Ok(sql.Outcome(rows: list.reverse(rows), affected:))
+        None ->
+          Ok(sql.Outcome(rows: list.reverse(acc.rows), affected: acc.affected))
       }
-    _ -> collect(reader, types, rows, affected, error)
+      Ok(Reply(result:, parsed: acc.parsed, types: acc.types, status:))
+    }
+    _ -> collect(reader, acc)
   }
 }
 
@@ -319,8 +438,8 @@ fn decode_value(oid: Int, value: Option(BitArray)) -> sql.Value {
   }
 }
 
-/// `INSERT 0 5`, `UPDATE 3`, `SELECT 10`, ... -> the count. Commands without
-/// one, such as `CREATE TABLE`, count as 0.
+/// `INSERT 0 5`, `UPDATE 3`, `SELECT 10`, `COPY 7`, ... -> the count.
+/// Commands without one, such as `CREATE TABLE`, count as 0.
 fn affected_rows(tag: String) -> Int {
   case string.split(tag, " ") |> list.last {
     Ok(count) -> int.parse(count) |> result.unwrap(0)
@@ -331,27 +450,236 @@ fn affected_rows(tag: String) -> Int {
 /// Run SQL text that may hold several statements using the simple query
 /// protocol.
 pub fn script(
-  socket: Socket,
+  connection: PgConnection,
   sql: String,
   timeout: Int,
 ) -> Result(Nil, sql.Error) {
+  let socket = connection.socket
+  use <- close_when_broken(socket)
+  use reply <- result.try(request_reply(
+    socket,
+    [protocol.query(sql)],
+    [],
+    timeout,
+  ))
+  reply.result |> result.replace(Nil)
+}
+
+// --- COPY --------------------------------------------------------------------
+
+/// Run a `COPY ... FROM STDIN` statement, sending the chunks `next` makes
+/// until it returns `None`. Returns the number of rows copied. `timeout`
+/// applies to waiting for each reply, not to the whole copy.
+pub fn copy_in(
+  connection: PgConnection,
+  sql: String,
+  state: s,
+  next: fn(s) -> Option(#(BitArray, s)),
+  timeout: Int,
+) -> Result(Int, sql.Error) {
+  let socket = connection.socket
   use <- close_when_broken(socket)
   use Nil <- result.try(send(socket, protocol.query(sql)))
   let reader = Reader(socket:, buffer: <<>>, deadline: now_ms() + timeout)
-  collect(reader, [], [], 0, None) |> result.replace(Nil)
+  await_copy_in(reader, state, next, timeout)
 }
 
-pub fn alive(socket: Socket) -> Bool {
-  ffi_alive(socket)
+fn await_copy_in(
+  reader: Reader,
+  state: s,
+  next: fn(s) -> Option(#(BitArray, s)),
+  timeout: Int,
+) -> Result(Int, sql.Error) {
+  use #(message, reader) <- result.try(next_message(reader))
+  case message {
+    protocol.CopyInResponse -> {
+      use Nil <- result.try(stream_copy_data(reader.socket, state, next))
+      let reader = Reader(..reader, deadline: now_ms() + timeout)
+      finish(reader)
+    }
+    // Not a COPY FROM STDIN: read its replies like any statement's.
+    protocol.ReadyForQuery(_) -> Ok(0)
+    protocol.ErrorResponse(fields) -> {
+      use _ <- result.try(finish(reader))
+      Error(server_error(fields))
+    }
+    _ -> await_copy_in(reader, state, next, timeout)
+  }
 }
 
-pub fn transfer(socket: Socket, pid: Pid) -> Nil {
-  ffi_transfer(socket, pid)
+fn stream_copy_data(
+  socket: Socket,
+  state: s,
+  next: fn(s) -> Option(#(BitArray, s)),
+) -> Result(Nil, sql.Error) {
+  case next(state) {
+    None -> send(socket, protocol.copy_done())
+    Some(#(chunk, state)) -> {
+      use Nil <- result.try(send(socket, protocol.copy_data(chunk)))
+      stream_copy_data(socket, state, next)
+    }
+  }
 }
 
-pub fn close(socket: Socket) -> Nil {
+/// Read to `ReadyForQuery`, returning the row count from the command tag.
+fn finish(reader: Reader) -> Result(Int, sql.Error) {
+  use reply <- result.try(collect(
+    reader,
+    Collected(types: [], rows: [], affected: 0, error: None, parsed: False),
+  ))
+  reply.result |> result.map(fn(outcome) { outcome.affected })
+}
+
+/// Run a `COPY ... TO STDOUT` statement, folding each chunk the server sends
+/// (a row, in the text and CSV formats) into `acc`. `timeout` applies to
+/// waiting for each chunk, not to the whole copy.
+pub fn copy_out(
+  connection: PgConnection,
+  sql: String,
+  acc: a,
+  fold: fn(a, BitArray) -> a,
+  timeout: Int,
+) -> Result(a, sql.Error) {
+  let socket = connection.socket
+  use <- close_when_broken(socket)
+  use Nil <- result.try(send(socket, protocol.query(sql)))
+  let reader = Reader(socket:, buffer: <<>>, deadline: now_ms() + timeout)
+  read_copy_out(reader, acc, fold, None, timeout)
+}
+
+fn read_copy_out(
+  reader: Reader,
+  acc: a,
+  fold: fn(a, BitArray) -> a,
+  error: Option(sql.Error),
+  timeout: Int,
+) -> Result(a, sql.Error) {
+  use #(message, reader) <- result.try(next_message(reader))
+  let reader = Reader(..reader, deadline: now_ms() + timeout)
+  case message {
+    protocol.CopyData(data) ->
+      read_copy_out(reader, fold(acc, data), fold, error, timeout)
+    protocol.ErrorResponse(fields) ->
+      read_copy_out(reader, acc, fold, Some(server_error(fields)), timeout)
+    protocol.CopyInResponse -> {
+      use Nil <- result.try(send(
+        reader.socket,
+        protocol.copy_fail("use pg.copy_in for COPY FROM STDIN"),
+      ))
+      read_copy_out(reader, acc, fold, error, timeout)
+    }
+    protocol.ReadyForQuery(_) ->
+      case error {
+        Some(error) -> Error(error)
+        None -> Ok(acc)
+      }
+    _ -> read_copy_out(reader, acc, fold, error, timeout)
+  }
+}
+
+// --- Lifecycle ---------------------------------------------------------------
+
+pub fn alive(connection: PgConnection) -> Bool {
+  ffi_alive(connection.socket)
+}
+
+/// Make `pid` the owner of the socket and the cache.
+pub fn transfer(connection: PgConnection, pid: Pid) -> Nil {
+  ffi_transfer(connection.socket, pid)
+  case connection.cache {
+    Some(cache) -> ffi_cache_give(cache, pid)
+    None -> Nil
+  }
+}
+
+pub fn close(connection: PgConnection) -> Nil {
+  close_socket(connection.socket)
+  case connection.cache {
+    Some(cache) -> ffi_cache_drop(cache)
+    None -> Nil
+  }
+}
+
+pub fn close_socket(socket: Socket) -> Nil {
   let _ = ffi_send(socket, protocol.terminate())
   ffi_close(socket)
+}
+
+// --- A socket in active mode, for a listener ---------------------------------
+
+/// What a message to the socket's owner means.
+pub type SocketMessage {
+  Data(BitArray)
+  SocketClosed
+  NotSocket
+}
+
+/// Deliver the next bytes received as a message to the owner.
+pub fn activate(socket: Socket) -> Nil {
+  ffi_activate(socket)
+}
+
+/// Stop delivering messages, returning bytes delivered but not yet handled.
+pub fn deactivate(socket: Socket) -> BitArray {
+  ffi_deactivate(socket)
+}
+
+pub fn socket_message(socket: Socket, message: Dynamic) -> SocketMessage {
+  case ffi_socket_message(socket, message) {
+    RawData(data) -> Data(data)
+    RawClosed -> SocketClosed
+    RawOther -> NotSocket
+  }
+}
+
+/// Split complete messages off `buffer`, returning them and the rest.
+pub fn decode_all(
+  buffer: BitArray,
+  acc: List(Message),
+) -> Result(#(List(Message), BitArray), sql.Error) {
+  case protocol.decode(buffer) {
+    Ok(#(message, rest)) -> decode_all(rest, [message, ..acc])
+    Error(protocol.Incomplete) -> Ok(#(list.reverse(acc), buffer))
+    Error(protocol.Malformed) ->
+      Error(sql.ConnectionLost("malformed message from the server"))
+  }
+}
+
+/// Run SQL text in passive mode, starting from bytes already received.
+/// Messages other than the replies to it, such as notifications, are given
+/// to `other`. Returns the bytes received after `ReadyForQuery`.
+pub fn command(
+  socket: Socket,
+  buffer: BitArray,
+  sql: String,
+  timeout: Int,
+  other: fn(Message) -> Nil,
+) -> Result(BitArray, sql.Error) {
+  use Nil <- result.try(send(socket, protocol.query(sql)))
+  let reader = Reader(socket:, buffer:, deadline: now_ms() + timeout)
+  await_command(reader, None, other)
+}
+
+fn await_command(
+  reader: Reader,
+  error: Option(sql.Error),
+  other: fn(Message) -> Nil,
+) -> Result(BitArray, sql.Error) {
+  use #(message, reader) <- result.try(next_message(reader))
+  case message {
+    protocol.ReadyForQuery(_) ->
+      case error {
+        Some(error) -> Error(error)
+        None -> Ok(reader.buffer)
+      }
+    protocol.ErrorResponse(fields) ->
+      await_command(reader, Some(server_error(fields)), other)
+    protocol.NotificationResponse(..) | protocol.NoticeResponse(_) -> {
+      other(message)
+      await_command(reader, error, other)
+    }
+    _ -> await_command(reader, error, other)
+  }
 }
 
 // --- Reading and writing -----------------------------------------------------
@@ -361,13 +689,17 @@ fn send(socket: Socket, data: BytesTree) -> Result(Nil, sql.Error) {
 }
 
 fn next(reader: Reader) -> Result(#(Message, Reader), sql.Error) {
+  next_message(reader)
+}
+
+fn next_message(reader: Reader) -> Result(#(Message, Reader), sql.Error) {
   case protocol.decode(reader.buffer) {
     Ok(#(message, rest)) -> Ok(#(message, Reader(..reader, buffer: rest)))
     Error(protocol.Malformed) ->
       Error(sql.ConnectionLost("malformed message from the server"))
     Error(protocol.Incomplete) -> {
       use data <- result.try(recv(reader.socket, reader.deadline))
-      next(Reader(..reader, buffer: <<reader.buffer:bits, data:bits>>))
+      next_message(Reader(..reader, buffer: <<reader.buffer:bits, data:bits>>))
     }
   }
 }
@@ -446,3 +778,50 @@ fn ffi_transfer(socket: Socket, pid: Pid) -> Nil
 
 @external(erlang, "gloss@pg_ffi", "close")
 fn ffi_close(socket: Socket) -> Nil
+
+@external(erlang, "gloss@pg_ffi", "activate")
+fn ffi_activate(socket: Socket) -> Nil
+
+@external(erlang, "gloss@pg_ffi", "deactivate")
+fn ffi_deactivate(socket: Socket) -> BitArray
+
+type RawSocketMessage {
+  RawData(BitArray)
+  RawClosed
+  RawOther
+}
+
+@external(erlang, "gloss@pg_ffi", "socket_message")
+fn ffi_socket_message(socket: Socket, message: Dynamic) -> RawSocketMessage
+
+@external(erlang, "gloss@pg_ffi", "cache_new")
+fn ffi_cache_new(size: Int) -> Cache
+
+@external(erlang, "gloss@pg_ffi", "cache_lookup")
+fn ffi_cache_lookup(
+  cache: Cache,
+  sql: String,
+) -> Result(#(String, List(Int)), Nil)
+
+@external(erlang, "gloss@pg_ffi", "cache_next_name")
+fn ffi_cache_next_name(cache: Cache) -> String
+
+@external(erlang, "gloss@pg_ffi", "cache_put")
+fn ffi_cache_put(
+  cache: Cache,
+  sql: String,
+  name: String,
+  types: List(Int),
+) -> Nil
+
+@external(erlang, "gloss@pg_ffi", "cache_delete")
+fn ffi_cache_delete(cache: Cache, sql: String) -> Nil
+
+@external(erlang, "gloss@pg_ffi", "cache_take_closing")
+fn ffi_cache_take_closing(cache: Cache) -> List(String)
+
+@external(erlang, "gloss@pg_ffi", "cache_give")
+fn ffi_cache_give(cache: Cache, pid: Pid) -> Nil
+
+@external(erlang, "gloss@pg_ffi", "cache_drop")
+fn ffi_cache_drop(cache: Cache) -> Nil

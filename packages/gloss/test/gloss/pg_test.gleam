@@ -275,6 +275,14 @@ pub fn connects_over_tls_test() {
           |> sql.returning(decode.at([0], decode.bool))
           |> sql.one(db, _)
       })
+      // The listener's socket runs in active mode over TLS.
+      let assert Ok(listener) = pg.start_listener(config)
+      let inbox = process.new_subject()
+      let assert Ok(Nil) = pg.listen(listener, "tls", inbox)
+      let assert Ok(1) = sql.exec(db, pg.notify("tls", "secure"))
+      let assert Ok(pg.Notification(payload: "secure", ..)) =
+        process.receive(inbox, 2000)
+      pg.stop_listener(listener)
       // A self-signed certificate fails verification.
       let assert Ok(db) =
         sql.new(pg.driver(pg.ssl(config, pg.SslVerified))) |> sql.start

@@ -44,6 +44,9 @@ pub type Message(conn, error) {
   Checkin(id: Int, reuse: Bool)
   Connected(Result(conn, error))
   Down(process.Down)
+  /// Anything else, such as the `ETS-TRANSFER` a driver's `transfer` may
+  /// cause. Discarded.
+  Other
   Shutdown
 }
 
@@ -80,6 +83,7 @@ pub fn start(
       process.new_selector()
       |> process.select(inbox)
       |> process.select_monitors(Down)
+      |> process.select_other(fn(_) { Other })
     State(
       self: process.self(),
       inbox:,
@@ -212,7 +216,7 @@ fn handle(
       }
     }
 
-    Down(process.PortDown(..)) -> actor.continue(state)
+    Down(process.PortDown(..)) | Other -> actor.continue(state)
 
     Shutdown -> {
       list.each(state.idle, fn(lease) { state.ops.close(lease.connection) })
