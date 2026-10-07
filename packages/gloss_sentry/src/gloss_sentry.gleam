@@ -52,6 +52,7 @@ import gleam/time/timestamp
 import gloss/logger.{type Logger}
 import gloss/meta.{type Meta}
 import gloss/tracer
+import gloss_sentry/internal/crash
 import gloss_sentry/internal/dsn.{type Dsn, type DsnError}
 import gloss_sentry/internal/engine
 import gloss_sentry/internal/envelope
@@ -198,6 +199,36 @@ pub fn capture_error(sentry: Sentry, error: String, meta: Meta) -> Nil {
     )
   try_send(sentry.subject, engine.Captured(timestamp.system_time(), body, meta))
 }
+
+/// Report every process that crashes as an unhandled exception, with its
+/// stack trace: actors, `process.spawn`ed processes, gen_servers, anything
+/// whose crash OTP logs. This adds a handler to OTP's `logger`; the usual
+/// crash reports still appear in the log. Calling it again moves reporting
+/// to the new `sentry`.
+///
+/// Crashes gloss already reports through the tracer, such as a scheduled
+/// task's, are skipped so they aren't reported twice. Supervisors' reports
+/// about restarting a child are skipped too: the crash itself is reported.
+pub fn report_crashes(sentry: Sentry) -> Result(Nil, Nil) {
+  install_crash_handler(fn(crash: crash.Crash) {
+    let #(body, meta) = crash.to_event(crash)
+    try_send(
+      sentry.subject,
+      engine.Captured(timestamp.system_time(), body, meta),
+    )
+  })
+}
+
+/// Stop reporting crashes.
+pub fn stop_reporting_crashes() -> Nil {
+  uninstall_crash_handler()
+}
+
+@external(erlang, "gloss_sentry_crash_ffi", "install")
+fn install_crash_handler(report: fn(crash.Crash) -> Nil) -> Result(Nil, Nil)
+
+@external(erlang, "gloss_sentry_crash_ffi", "uninstall")
+fn uninstall_crash_handler() -> Nil
 
 /// Stop the sender. Queued envelopes are dropped.
 pub fn stop(sentry: Sentry) -> Nil {

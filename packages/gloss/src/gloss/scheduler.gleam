@@ -310,6 +310,8 @@ fn perform(
         let inbox = shell.inbox
         let pid =
           process.spawn_unlinked(fn() {
+            // A crash here is reported as the task's Crashed event.
+            mark_traced()
             let result = task.handler()
             process.send(inbox, Finished(task.name, process.self(), result))
           })
@@ -327,3 +329,6 @@ fn perform(
     }
   })
 }
+
+@external(erlang, "gloss@logger_ffi", "mark_traced")
+fn mark_traced() -> Nil

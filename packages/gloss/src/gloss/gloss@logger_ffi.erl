@@ -1,5 +1,5 @@
 -module(gloss@logger_ffi).
--export([log/3]).
+-export([log/3, mark_traced/0]).
 
 %% Forward a gloss log entry to OTP's logger. Level is one of the atoms
 %% debug | info | warning | error. Meta is a Gleam `meta.Meta`: a list of
@@ -17,3 +17,10 @@ value({string, S}) -> S;
 value({int, I}) -> I;
 value({float, F}) -> F;
 value({bool, B}) -> B.
+
+%% Mark the calling process as one whose crash a gloss library reports
+%% through the tracer, so crash reporters (gloss_sentry) can skip the OTP
+%% crash report for it rather than report it twice.
+mark_traced() ->
+    logger:update_process_metadata(#{gloss_traced => true}),
+    nil.
