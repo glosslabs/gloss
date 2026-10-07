@@ -2,6 +2,7 @@ import app/config.{type Config}
 import gloss/http/compress
 import gloss/http/cookie
 import gloss/http/csrf
+import gloss/http/secure_headers
 import gloss/http/server.{
   type Builder, type Server, type ShutdownError, type StartError,
 }
@@ -41,6 +42,7 @@ pub fn builder(
   |> server.tracer(tracer)
   |> server.logger(logger)
   |> server.sessions(sessions)
+  |> server.with(secure_headers.protect)
   |> server.with(csrf.protect)
   |> server.with(compress.gzip)
   |> server.error_page(errors.page)
