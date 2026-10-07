@@ -1,0 +1,22 @@
+---
+import { render } from "astro:content";
+import Page from "../../layouts/Page.astro";
+import { loadNav, siteName } from "../../site";
+
+export async function getStaticPaths() {
+  const nav = await loadNav();
+  return nav
+    .flatMap((section) => section.articles)
+    .map((article) => ({ params: { id: article.id }, props: { article } }));
+}
+
+const { article } = Astro.props;
+const { Content } = await render(article);
+---
+
+<Page title={`${article.data.title} - ${siteName}`}>
+  <article>
+    <h1>{article.data.title}</h1>
+    <Content />
+  </article>
+</Page>

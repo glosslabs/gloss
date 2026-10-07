@@ -1,0 +1,62 @@
+---
+import { loadNav, route, siteName } from "../site";
+import "../styles/main.css";
+
+interface Props {
+  title: string;
+}
+
+const { title } = Astro.props;
+const nav = await loadNav();
+const current = Astro.url.pathname.replace(/\/$/, "");
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+  </head>
+  <body class="font-mono bg-bg">
+    <div class="p-3">
+      <div class="w-full max-w-6xl mx-auto">
+        <header class="mb-8">
+          <a href="/">
+            <img class="h-10" src="/hero.svg" alt={siteName} />
+          </a>
+        </header>
+        <div class="flex flex-col gap-8 md:flex-row">
+          <nav class="md:w-60 md:shrink-0 text-sm">
+            {
+              nav.map((section) => (
+                <section class="mb-6">
+                  <h2 class="mb-2 font-bold text-fg">{section.title}</h2>
+                  <ul>
+                    {section.articles.map((article) => (
+                      <li>
+                        <a
+                          href={route(article)}
+                          class:list={[
+                            "block py-0.5",
+                            route(article) === current
+                              ? "text-accent"
+                              : "text-fg-dim hover:text-fg",
+                          ]}
+                        >
+                          {article.data.title}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ))
+            }
+          </nav>
+          <main class="min-w-0 flex-1">
+            <slot />
+          </main>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

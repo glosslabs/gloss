@@ -1,0 +1,102 @@
+@import "tailwindcss";
+
+:root {
+  --mulberry-bg: #ffffff;
+  --mulberry-bg-alt: #f6f5f9;
+  --mulberry-bg-raised: #eeebf4;
+  --mulberry-bg-hi: #fbeff5;
+  --mulberry-bg-visual: #f4d7e5;
+  --mulberry-fg: #211c2e;
+  --mulberry-fg-dim: #4a4458;
+  --mulberry-muted: #675f74;
+  --mulberry-rule: #ddd8e6;
+  --mulberry-accent: #c9377e;
+  --mulberry-accent-fg: #ffffff;
+
+  --mulberry-plum: #6a2c7a;
+  --mulberry-rose: #8b2f5e;
+  --mulberry-amber: #8a5300;
+  --mulberry-blue: #2b559e;
+  --mulberry-teal: #1b7068;
+
+  --mulberry-red: #b3261e;
+  --mulberry-orange: #a34e00;
+  --mulberry-green: #2e6b34;
+
+  --mulberry-diff-add: #e4f3e5;
+  --mulberry-diff-change: #e8eefa;
+  --mulberry-diff-delete: #fbe6e4;
+  --mulberry-diff-text: #ccdaf5;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --mulberry-bg: #1e1a29;
+    --mulberry-bg-alt: #17141f;
+    --mulberry-bg-raised: #2a2537;
+    --mulberry-bg-hi: #2b2438;
+    --mulberry-bg-visual: #4a2f52;
+    --mulberry-fg: #eeeaf4;
+    --mulberry-fg-dim: #cbc4d6;
+    --mulberry-muted: #a79fb4;
+    --mulberry-rule: #342e42;
+    --mulberry-accent: #f08cbf;
+    --mulberry-accent-fg: #1e1a29;
+
+    --mulberry-plum: #eba9f3;
+    --mulberry-rose: #f4a6c9;
+    --mulberry-amber: #e9c27c;
+    --mulberry-blue: #a3bdf2;
+    --mulberry-teal: #6fd2c5;
+
+    --mulberry-red: #f2a0a0;
+    --mulberry-orange: #f0b27a;
+    --mulberry-green: #9ad6a0;
+
+    --mulberry-diff-add: #233628;
+    --mulberry-diff-change: #242c40;
+    --mulberry-diff-delete: #3d2429;
+    --mulberry-diff-text: #33406a;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--mulberry-bg);
+  --color-bg-alt: var(--mulberry-bg-alt);
+  --color-bg-raised: var(--mulberry-bg-raised);
+  --color-bg-hi: var(--mulberry-bg-hi);
+  --color-bg-visual: var(--mulberry-bg-visual);
+  --color-fg: var(--mulberry-fg);
+  --color-fg-dim: var(--mulberry-fg-dim);
+  --color-muted: var(--mulberry-muted);
+  --color-rule: var(--mulberry-rule);
+  --color-accent: var(--mulberry-accent);
+  --color-accent-fg: var(--mulberry-accent-fg);
+
+  --color-plum: var(--mulberry-plum);
+  --color-rose: var(--mulberry-rose);
+  --color-amber: var(--mulberry-amber);
+  --color-blue: var(--mulberry-blue);
+  --color-teal: var(--mulberry-teal);
+
+  --color-red: var(--mulberry-red);
+  --color-orange: var(--mulberry-orange);
+  --color-green: var(--mulberry-green);
+
+  --color-diff-add: var(--mulberry-diff-add);
+  --color-diff-change: var(--mulberry-diff-change);
+  --color-diff-delete: var(--mulberry-diff-delete);
+  --color-diff-text: var(--mulberry-diff-text);
+}
+
+@layer base {
+  html {
+    @apply bg-bg text-fg;
+  }
+
+  ::selection {
+    @apply bg-bg-visual;
+  }
+}
