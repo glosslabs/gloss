@@ -32,11 +32,13 @@ add more as the application grows.
 
 | Module | |
 |---|---|
-| `app` | `main`: composes the layers below, waits for SIGTERM, shuts down |
+| `app` | `main`: composes the layers below (including wiring the logger into the tracer), waits for SIGTERM, shuts down |
 | `app/config` | Settings from the environment |
 | `app/state` | `State`, what handlers reach through `ctx.state` |
 | `app/notes` | The notes domain: an in-memory store |
-| `app/reporters` | Where logs, traces and failures go: stdout/stderr and rotated files split by level, plus Sentry errors and logs when configured |
+| `app/logging` | Log channels: stdout/stderr and rotated files split by level, plus Sentry Logs |
+| `app/tracing` | Tracer handlers: the access log and Sentry error reports |
+| `app/sentry` | Starts Sentry reporting when `SENTRY_DSN` is set |
 | `app/server` | The HTTP server: combines the route groups and starts serving |
 | `app/routes/api` | The API's route table, and nothing else |
 | `app/handlers/*` | One module per resource: `health`, `notes`, `users` |

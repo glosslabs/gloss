@@ -1,53 +1,58 @@
-//// The HTTP server: the routes, served with the application's logger and
-//// tracer, CSRF protection and compression.
-
 import app/config.{type Config}
 import gloss/http/compress
+import gloss/http/cookie
 import gloss/http/csrf
 import gloss/http/server.{
   type Builder, type Server, type ShutdownError, type StartError,
 }
-import gloss/http/session.{type Sessions}
+import gloss/http/session
+import gloss/http/session/memory
 import gloss/http/static
 import gloss/logger.{type Logger}
 import gloss/tracer.{type Tracer}
-import server/routes
+import server/routing
 import server/state.{type State}
 import server/views/errors
 
-/// The server for the application's state, with the infrastructure the
-/// server owns: its logger, tracer and sessions.
 pub fn builder(
-  config: Config,
-  state: State,
-  log log: Logger,
+  config config: Config,
+  state state: State,
+  logger logger: Logger,
   tracer tracer: Tracer,
-  sessions sessions: Sessions,
 ) -> Builder(State) {
   let assets_dir = case static.priv("app") {
     Ok(priv) -> priv <> "/static"
     Error(Nil) -> "priv/static"
   }
-  routes.routes(assets_dir:, avatars_dir: state.avatars_dir)
+
+  let assert Ok(store) = memory.start()
+  let sessions =
+    session.new(store)
+    |> session.cookie_name("forum_session")
+    |> session.cookie_attributes(
+      cookie.defaults()
+      |> cookie.secure(config.environment != "development"),
+    )
+
+  routing.routes(assets_dir:, avatars_dir: state.avatars_dir)
   |> server.new(state)
   |> server.bind("0.0.0.0")
   |> server.port(config.port)
   |> server.tracer(tracer)
-  |> server.logger(log)
+  |> server.logger(logger)
   |> server.sessions(sessions)
   |> server.with(csrf.protect)
   |> server.with(compress.gzip)
   |> server.error_page(errors.page)
 }
 
-pub fn start(
-  config: Config,
-  state: State,
-  log log: Logger,
+pub fn start_with(
+  config config: Config,
+  state state: State,
+  logger logger: Logger,
   tracer tracer: Tracer,
-  sessions sessions: Sessions,
 ) -> Result(Server, StartError) {
-  builder(config, state, log:, tracer:, sessions:) |> server.start
+  server.start(builder(config:, state:, logger:, tracer:))
 }
 
 /// Finish in-flight requests, then stop.

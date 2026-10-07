@@ -16,26 +16,32 @@ open http://localhost:4000
 | `PORT` | `4000` | |
 | `APP_ENV` | `development` | Outside `development` the session cookie is `Secure` |
 | `DATA_DIR` | `data` | Avatars are written to `DATA_DIR/avatars` |
+| `LOG_DIR` | `log` | Where `app.log` (debug, info) and `error.log` (warnings, errors) are written; each rotates at 10 MB, keeping 5 |
+| `SENTRY_DSN` | unset | Report failed requests and error events to Sentry |
 
 ## Layout
 
-The core of the application is separate from the web server. `domain/`
-knows nothing of HTTP or HTML; `server/` depends on it, never the reverse.
+The core of the application is separate from the web server and from
+outside services. `domain/` knows nothing of HTTP, HTML or Sentry;
+`server/` and `infra/` depend on it, never the reverse. `app/` is where
+they are composed.
 
 | Module | |
 |---|---|
-| `app` | `main`: composes config, reporters, the domain services and the server |
-| `app/config`, `app/reporters` | Settings from the environment; where logs and traces go |
+| `app` | `main`: composes config, logging, tracing, the domain services and the server |
+| `app/config` | Settings from the environment |
+| `app/logging`, `app/tracing` | Where log entries go (console and rotated files); where trace events go (the log and Sentry) |
 | `domain/accounts` | Registration, sign-in, profiles and avatars |
 | `domain/accounts/user` | User rules; passwords are hashed with `gloss/password` |
 | `domain/forum` | Threads and replies |
 | `domain/forum/thread` | Thread and post rules |
 | `server` | The HTTP server: routes, CSRF protection, compression, error pages |
 | `server/state` | What handlers reach through `ctx.state`, including the signed-in user |
-| `server/routes` | The route table, and nothing else |
+| `server/routing` | The route table, and nothing else |
 | `server/handlers/*` | One module per area: accounts, threads, profile, users |
 | `server/middleware/current_user` | The signed-in user from the session |
 | `server/views/*` | Lustre views rendered to HTML |
+| `infra/sentry` | The Sentry client, started when `SENTRY_DSN` is set |
 
 ## What it exercises
 

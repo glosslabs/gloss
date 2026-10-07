@@ -16,8 +16,6 @@ import gleeunit/should
 import gloss/http/body
 import gloss/http/reply
 import gloss/http/server as gloss_server
-import gloss/http/session
-import gloss/http/session/memory
 import gloss/logger
 import gloss/tracer
 import server
@@ -33,18 +31,17 @@ fn browser() -> #(Browser, String) {
     <> int.to_string(system_time())
     <> "-"
     <> int.to_string(unique())
-  let config = Config(port: 0, environment: "test", data_dir:)
+  let config =
+    Config(..config.defaults(), port: 0, environment: "test", data_dir:)
   let assert Ok(accounts) = accounts.start()
   let assert Ok(forum) = forum.start()
-  let assert Ok(store) = memory.start()
   let state = state.new(accounts:, forum:, avatars_dir: data_dir <> "/avatars")
   let builder =
     server.builder(
       config,
       state,
-      log: logger.discard(),
+      logger: logger.discard(),
       tracer: tracer.new(),
-      sessions: session.new(store) |> session.cookie_name("s"),
     )
   #(Browser(send: fn(req) { gloss_server.handle(builder, req) }), data_dir)
 }
@@ -54,7 +51,7 @@ fn get(path: String, cookie: String) {
   |> request.set_method(http.Get)
   |> request.set_scheme(http.Http)
   |> request.set_path(path)
-  |> request.set_header("cookie", "s=" <> cookie)
+  |> request.set_header("cookie", "forum_session=" <> cookie)
   |> request.set_header("accept", "text/html")
   |> request.set_body(body.from_bits(<<>>))
 }
@@ -76,7 +73,7 @@ fn session_cookie(res: Response(a)) -> String {
   res.headers
   |> list.find_map(fn(header) {
     case header {
-      #("set-cookie", "s=" <> rest) ->
+      #("set-cookie", "forum_session=" <> rest) ->
         case string.split_once(rest, ";") {
           Ok(#(value, _)) -> Ok(value)
           Error(Nil) -> Ok(rest)

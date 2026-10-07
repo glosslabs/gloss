@@ -1,7 +1,3 @@
-//// What handlers reach through `ctx.state`: the application's own
-//// services. The server's infrastructure (log, tracer, sessions) is on the
-//// context itself.
-
 import domain/accounts.{type Accounts}
 import domain/accounts/user.{type User}
 import domain/forum.{type Forum}

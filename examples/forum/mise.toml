@@ -1,7 +1,7 @@
 # Tools (gleam, erlang) come from the repository's root mise.toml.
 
 [tasks.dev]
-description = "Run the server on :4000 (PORT, APP_ENV, DATA_DIR)"
+description = "Run the server on :4000 (PORT, APP_ENV, DATA_DIR, LOG_DIR, SENTRY_DSN)"
 run = "gleam run"
 
 [tasks.test]
