@@ -81,7 +81,7 @@ fn guard(condition: Bool, next: fn() -> Result(a, Nil)) -> Result(a, Nil) {
   }
 }
 
-@external(erlang, "gloss@pg_ffi", "pbkdf2")
+@external(erlang, "gloss@database@pg_ffi", "pbkdf2")
 fn pbkdf2(password: BitArray, salt: BitArray, iterations: Int) -> BitArray
 
 @external(erlang, "crypto", "exor")

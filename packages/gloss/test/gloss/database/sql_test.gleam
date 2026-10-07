@@ -5,7 +5,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/time/duration
-import gloss/sql
+import gloss/database/sql
 import gloss/tracer
 import sql_fake_driver as fake
 
@@ -242,5 +242,5 @@ pub fn failed_statements_are_failed_spans_test() {
     process.receive(spans, 100)
 }
 
-@external(erlang, "gloss@sql_ffi", "rescue")
+@external(erlang, "gloss@database@sql_ffi", "rescue")
 fn rescue(work: fn() -> a) -> Result(a, b)

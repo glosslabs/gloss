@@ -7,8 +7,8 @@ dependencies beyond the gleam-lang packages.
 | Module | |
 |---|---|
 | `gloss/http/*` | HTTP/1.1 server, router, request context, replies and body decoding |
-| `gloss/sql` | Statements, row decoding, transactions and a connection pool, shared by every database driver |
-| `gloss/pg` | A Postgres driver for `gloss/sql`, speaking the wire protocol directly, with a prepared statement cache, `COPY` and `LISTEN`/`NOTIFY` |
+| `gloss/database/sql` | Statements, row decoding, transactions and a connection pool, shared by every database driver |
+| `gloss/database/pg` | A Postgres driver for `gloss/database/sql`, speaking the wire protocol directly, with a prepared statement cache, `COPY` and `LISTEN`/`NOTIFY` |
 | `gloss/tracer` | Spans and points, delivered to handlers you attach |
 | `gloss/logger` | Structured logging with channels (`stdout`, `stderr`, `otp`, `memory`, …), `min_level`/`max_level` to split them |
 | `gloss/logger/file` | A log channel that appends to a file and rotates it by size |
@@ -159,14 +159,14 @@ for HTTP/1.1), and upgraded to WebSockets with `gloss/http/websocket`.
 
 ## Database
 
-`gloss/sql` is the database API: one `Db` handle, statements with typed row
-decoders, transactions and a connection pool. A driver does the
-database-specific work; `gloss/pg` is the first.
+`gloss/database/sql` is the database API: one `Db` handle, statements
+with typed row decoders, transactions and a connection pool. A driver does
+the database-specific work; `gloss/database/pg` is the first.
 
 ```gleam
 import gleam/dynamic/decode
-import gloss/pg
-import gloss/sql
+import gloss/database/pg
+import gloss/database/sql
 
 let assert Ok(config) = pg.from_url("postgres://app:secret@localhost/app")
 let assert Ok(db) =
@@ -224,8 +224,8 @@ statements in the request's trace.
 
 ### Postgres
 
-`gloss/pg` supports SCRAM-SHA-256, MD5 and cleartext passwords, and TLS
-(`pg.ssl` or `?sslmode=`). Arguments are sent as text and typed by the
+`gloss/database/pg` supports SCRAM-SHA-256, MD5 and cleartext passwords,
+and TLS (`pg.ssl` or `?sslmode=`). Arguments are sent as text and typed by the
 server, so `sql.Text` serves `uuid`, `json` and `numeric` columns, and
 `sql.Array` serves `= any($1)`. Columns come back as Gleam values: ints,
 floats, bools, bytes, dates, times, timestamps and arrays of them, and

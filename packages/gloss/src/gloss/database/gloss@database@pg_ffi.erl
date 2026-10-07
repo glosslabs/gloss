@@ -1,4 +1,4 @@
--module(gloss@pg_ffi).
+-module(gloss@database@pg_ffi).
 -export([connect/3, upgrade/4, send/2, recv/2, alive/1, transfer/2, close/1,
          pbkdf2/3, pg_connection/1, activate/1, deactivate/1, socket_message/2,
          cache_new/1, cache_lookup/2, cache_next_name/1, cache_put/4,

@@ -8,8 +8,8 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
 import gleam/time/duration
-import gloss/pg
-import gloss/sql
+import gloss/database/pg
+import gloss/database/sql
 
 fn config() -> Result(pg.Config, Nil) {
   case getenv("GLOSS_TEST_PG_URL") {

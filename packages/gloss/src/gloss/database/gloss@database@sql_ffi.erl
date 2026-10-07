@@ -1,4 +1,4 @@
--module(gloss@sql_ffi).
+-module(gloss@database@sql_ffi).
 -export([rescue/1, reraise/1, row/1, coerce/1, timestamp/1, date/1,
          time_of_day/1, try_send/2]).
 

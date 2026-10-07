@@ -1,6 +1,6 @@
 import gleam/erlang/process
-import gloss/pg
-import gloss/sql
+import gloss/database/pg
+import gloss/database/sql
 
 pub fn rejects_other_schemes_test() {
   assert pg.from_url("mysql://localhost/db") == Error(Nil)
