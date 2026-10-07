@@ -1,12 +1,14 @@
 # gloss
 
-The core of gloss: an HTTP server and router, tracing, logging, a
-scheduler and signal handling, with no dependencies beyond the gleam-lang
-packages.
+The core of gloss: an HTTP server and router, a database layer with a
+Postgres driver, tracing, logging, a scheduler and signal handling, with no
+dependencies beyond the gleam-lang packages.
 
 | Module | |
 |---|---|
 | `gloss/http/*` | HTTP/1.1 server, router, request context, replies and body decoding |
+| `gloss/sql` | Statements, row decoding, transactions and a connection pool, shared by every database driver |
+| `gloss/pg` | A Postgres driver for `gloss/sql`, speaking the wire protocol directly |
 | `gloss/tracer` | Spans and points, delivered to handlers you attach |
 | `gloss/logger` | Structured logging with channels (`stdout`, `stderr`, `otp`, `memory`, …), `min_level`/`max_level` to split them |
 | `gloss/logger/file` | A log channel that appends to a file and rotates it by size |
@@ -154,3 +156,81 @@ bodies may be sent with `Content-Length` or chunked. They are read only when
 a handler asks: in full up to `max_body` (`body.bits`/`text`/`json`), or
 streamed piece by piece for large uploads (`body.stream`). Responses can be streamed with `reply.stream` (chunked
 for HTTP/1.1), and upgraded to WebSockets with `gloss/http/websocket`.
+
+## Database
+
+`gloss/sql` is the database API: one `Db` handle, statements with typed row
+decoders, transactions and a connection pool. A driver does the
+database-specific work; `gloss/pg` is the first.
+
+```gleam
+import gleam/dynamic/decode
+import gloss/pg
+import gloss/sql
+
+let assert Ok(config) = pg.from_url("postgres://app:secret@localhost/app")
+let assert Ok(db) =
+  sql.new(pg.driver(config))
+  |> sql.pool_size(10)
+  |> sql.tracer(tracer)
+  |> sql.start
+
+let user = {
+  use id <- decode.field(0, decode.int)
+  use email <- decode.field(1, decode.string)
+  decode.success(User(id:, email:))
+}
+
+sql.query("select id, email from users where id = $1")
+|> sql.bind(sql.Int(id))
+|> sql.returning(user)
+|> sql.one(db, _)
+```
+
+`sql.all`, `sql.one`, `sql.optional` and `sql.exec` run a statement for
+its rows, its only row, an optional row, or the count of affected rows.
+`sql.script` runs SQL text holding several statements, such as a schema.
+Statements can also be built from parts, with placeholders numbered for
+you:
+
+```gleam
+sql.query("select id, email from users where deleted_at is null")
+|> sql.when(status, fn(s, status) {
+  s |> sql.append(" and status = ") |> sql.arg(sql.Text(status))
+})
+|> sql.append(" order by id limit ")
+|> sql.arg(sql.Int(limit))
+```
+
+`sql.transaction(db, fn(tx) { ... })` commits when the body returns `Ok`,
+rolls back on `Error` or a panic, and turns nested transactions into
+savepoints. Errors are one `sql.Error` type for every driver, with
+`UniqueViolation`, `ForeignKeyViolation`, `NotNullViolation` and
+`CheckViolation` broken out so callers can match on them.
+
+### The pool
+
+Connections open on demand, up to `pool_size`, in helper processes so a
+slow connect never blocks other callers. A statement borrows a connection
+and runs on it in the caller's process, so rows never pass through the
+pool. A process that dies holding a connection has it closed rather than
+reused. Use `sql.supervised(builder)` in a supervision tree and
+`sql.db(builder)` for the handle; it works across pool restarts.
+
+Every statement is a `tracer.Span` from source `"gloss.sql"`, and
+transactions are spans whose statements are their children.
+`sql.child_of(db, traceparent.span_context(ctx.trace))` puts a request's
+statements in the request's trace.
+
+### Postgres
+
+`gloss/pg` supports SCRAM-SHA-256, MD5 and cleartext passwords, and TLS
+(`pg.ssl` or `?sslmode=`). Arguments are sent as text and typed by the
+server, so `sql.Text` serves `uuid`, `json` and `numeric` columns, and
+`sql.Array` serves `= any($1)`. Columns come back as Gleam values: ints,
+floats, bools, bytes, dates, times, timestamps and arrays of them, and
+everything else as text. There is no prepared statement cache yet, and no
+`LISTEN`/`NOTIFY` or `COPY`.
+
+The Postgres tests run when `GLOSS_TEST_PG_URL` is set, e.g.
+`GLOSS_TEST_PG_URL=postgres://postgres:secret@127.0.0.1:5432/postgres gleam test`.
