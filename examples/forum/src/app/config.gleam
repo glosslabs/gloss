@@ -14,6 +14,9 @@ pub type Config {
     /// Where `app.log` and `error.log` are written.
     log_dir: String,
     sentry_dsn: Option(String),
+    /// An OTLP/HTTP endpoint to export traces and logs to, such as
+    /// `http://localhost:4318`.
+    otel_endpoint: Option(String),
     /// The Postgres database, as a `postgres://` URL.
     database_url: String,
   )
@@ -27,12 +30,13 @@ pub fn defaults() -> Config {
     data_dir: "data",
     log_dir: "log",
     sentry_dsn: None,
+    otel_endpoint: None,
     database_url: "postgres://postgres:postgres@localhost:5432/forum",
   )
 }
 
 /// The defaults, with `PORT`, `APP_ENV`, `DATA_DIR`, `LOG_DIR`,
-/// `SENTRY_DSN` and `DATABASE_URL` applied over them where they are set.
+/// `SENTRY_DSN`, `OTEL_EXPORTER_OTLP_ENDPOINT` and `DATABASE_URL` applied over them where they are set.
 pub fn from_env() -> Config {
   let defaults = defaults()
   Config(
@@ -45,6 +49,9 @@ pub fn from_env() -> Config {
     sentry_dsn: envoy.get("SENTRY_DSN")
       |> option.from_result
       |> option.or(defaults.sentry_dsn),
+    otel_endpoint: envoy.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+      |> option.from_result
+      |> option.or(defaults.otel_endpoint),
     database_url: envoy.get("DATABASE_URL")
       |> result.unwrap(defaults.database_url),
   )

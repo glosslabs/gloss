@@ -1,15 +1,19 @@
 import app/config
 import app/db
 import app/logging
+import app/otel
 import app/sentry
 import app/tracing
 import domain/accounts
 import domain/forum
+import gleam/option.{None, Some}
+import gleam/time/duration
 import gloss/clock
 import gloss/http/server as http_server
 import gloss/meta
 import gloss/signal
 import gloss/tracer
+import gloss_otel
 import server
 import server/state
 import store/threads
@@ -19,11 +23,13 @@ pub fn main() -> Nil {
   let config = config.from_env()
   let log = logging.default(config)
   let sentry = sentry.start(config)
+  let otel = otel.start(config)
 
   let tracer =
     tracer.new()
     |> tracing.with_logger(log)
     |> tracing.with_sentry(sentry)
+    |> tracing.with_otel(otel)
 
   let assert Ok(db) = db.start(config.database_url, tracer)
   let users = users.new(db)
@@ -36,7 +42,13 @@ pub fn main() -> Nil {
       avatars_dir: config.data_dir <> "/avatars",
     )
 
-  let assert Ok(srv) = server.start_with(config:, state:, logger: log, tracer:)
+  let assert Ok(srv) =
+    server.start_with(
+      config:,
+      state:,
+      logger: tracing.handler_logger(log, otel),
+      tracer:,
+    )
 
   signal.wait_for_terminate()
 
@@ -47,5 +59,13 @@ pub fn main() -> Nil {
         #("remaining", meta.Int(remaining)),
       ])
     }
+  }
+  // Send the last traces and logs before the node stops.
+  case otel {
+    Some(otel) -> {
+      let _ = gloss_otel.flush(otel, duration.seconds(5))
+      Nil
+    }
+    None -> Nil
   }
 }

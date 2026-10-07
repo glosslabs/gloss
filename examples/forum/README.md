@@ -21,6 +21,7 @@ open http://localhost:4000
 | `DATA_DIR` | `data` | Avatars are written to `DATA_DIR/avatars` |
 | `LOG_DIR` | `log` | Where `app.log` (debug, info) and `error.log` (warnings, errors) are written; each rotates at 10 MB, keeping 5 |
 | `SENTRY_DSN` | unset | Report failed requests and error events to Sentry |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | Export traces and logs to OpenTelemetry, e.g. `http://localhost:4318` |
 | `DATABASE_URL` | `postgres://postgres:postgres@localhost:5432/forum` | The Postgres database |
 
 ## Layout
@@ -34,7 +35,8 @@ outside services (logging, Sentry, the database) and composes everything.
 |---|---|
 | `app` | `main`: composes config, logging, tracing, the domain services and the server |
 | `app/config` | Settings from the environment |
-| `app/logging`, `app/tracing` | Where log entries go (console and rotated files); where trace events go (the log and Sentry) |
+| `app/logging`, `app/tracing` | Where log entries go (console and rotated files); where trace events go (the log, Sentry and OpenTelemetry) |
+| `app/otel` | The OpenTelemetry exporter, started when `OTEL_EXPORTER_OTLP_ENDPOINT` is set |
 | `app/sentry` | The Sentry client, started when `SENTRY_DSN` is set |
 | `app/db` | The Postgres connection pool, and the schema it creates at start |
 | `domain/accounts` | Registration, sign-in, profiles and avatars |
