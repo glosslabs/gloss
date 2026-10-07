@@ -24,26 +24,27 @@ fn sessions() -> Sessions {
 fn app(sessions: Sessions) {
   let routes =
     router.new()
-    |> router.get("/read", fn(req, _) {
-      use s <- session.load(req, sessions)
+    |> router.get("/read", fn(req, ctx) {
+      use s <- session.load(req, ctx.sessions)
       case session.get(s, "user") {
         Ok(user) -> reply.text(200, user)
         Error(Nil) -> reply.text(200, "anonymous")
       }
     })
     |> router.post("/login/:user", fn(req, ctx) {
-      use s <- session.load(req, sessions)
+      use s <- session.load(req, ctx.sessions)
       let assert Ok(user) = context.param(ctx, "user")
       s
       |> session.regenerate
       |> session.set("user", user)
       |> session.save(reply.empty(204))
     })
-    |> router.post("/logout", fn(req, _) {
-      use s <- session.load(req, sessions)
+    |> router.post("/logout", fn(req, ctx) {
+      use s <- session.load(req, ctx.sessions)
       session.destroy(s, reply.empty(204))
     })
-  fn(req) { server.handle(server.new(routes, Nil), req) }
+  let builder = server.new(routes, Nil) |> server.sessions(sessions)
+  fn(req) { server.handle(builder, req) }
 }
 
 /// The session id from a response's set-cookie, if any.
@@ -137,4 +138,15 @@ pub fn custom_cookie_name_and_attributes_test() {
   let set_cookie = header(res, "set-cookie")
   string.starts_with(set_cookie, "sid=") |> should.be_true
   string.contains(set_cookie, "Secure") |> should.be_false
+}
+
+pub fn unconfigured_sessions_fail_to_save_test() {
+  let routes =
+    router.new()
+    |> router.post("/", fn(req, ctx) {
+      use s <- session.load(req, ctx.sessions)
+      session.save(session.set(s, "k", "v"), reply.empty(204))
+    })
+  let res = server.handle(server.new(routes, Nil), request(http.Post, "/"))
+  res.status |> should.equal(500)
 }

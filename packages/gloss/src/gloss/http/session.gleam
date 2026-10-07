@@ -2,14 +2,14 @@
 //// data stays in a `Store` on the server.
 ////
 //// ```gleam
-//// // At boot, kept in the application state:
+//// // At boot, given to the server:
 //// let assert Ok(store) = memory.start()
-//// let sessions = session.new(store)
+//// server.new(routes(), state) |> server.sessions(session.new(store))
 ////
 //// // In a handler:
 //// pub fn login(req: Request, ctx: Context(State)) -> Response {
 ////   use input <- body.json(req, login_decoder())
-////   use session <- session.load(req, ctx.state.sessions)
+////   use session <- session.load(req, ctx.sessions)
 ////   session
 ////   |> session.regenerate
 ////   |> session.set("user_id", input.user_id)
@@ -61,6 +61,21 @@ pub opaque type Session {
     data: Dict(String, String),
     /// The id the client sent, if it named a live session.
     loaded: Option(String),
+  )
+}
+
+/// Sessions for a server that wasn't given any (see `server.sessions`):
+/// every visitor is new, and saving a session fails with an error that
+/// says to configure them.
+pub fn unconfigured() -> Sessions {
+  new(
+    Store(
+      load: fn(_) { Error(Nil) },
+      save: fn(_, _, _) {
+        panic as "sessions are not configured: pass them to server.sessions"
+      },
+      delete: fn(_) { Nil },
+    ),
   )
 }
 

@@ -37,15 +37,15 @@ fn browser() -> #(Browser, String) {
   let assert Ok(accounts) = accounts.start()
   let assert Ok(forum) = forum.start()
   let assert Ok(store) = memory.start()
-  let state =
-    state.new(
-      accounts:,
-      forum:,
-      sessions: session.new(store) |> session.cookie_name("s"),
-      avatars_dir: data_dir <> "/avatars",
+  let state = state.new(accounts:, forum:, avatars_dir: data_dir <> "/avatars")
+  let builder =
+    server.builder(
+      config,
+      state,
       log: logger.discard(),
+      tracer: tracer.new(),
+      sessions: session.new(store) |> session.cookie_name("s"),
     )
-  let builder = server.builder(config, state, tracer.new())
   #(Browser(send: fn(req) { gloss_server.handle(builder, req) }), data_dir)
 }
 

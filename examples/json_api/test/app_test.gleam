@@ -37,9 +37,14 @@ fn session() -> fn(Request) -> Response(BytesTree) {
       log_dir: "build/test-log",
     )
   let assert Ok(notes) = notes.start()
-  let ctx =
-    state.new(config, log: logger.discard(), tracer: tracer.new(), notes:)
-  let builder = app_server.builder(config, ctx)
+  let state = state.new(config, notes:)
+  let builder =
+    app_server.builder(
+      config,
+      state,
+      log: logger.discard(),
+      tracer: tracer.new(),
+    )
   server.handle(builder, _)
 }
 

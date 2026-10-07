@@ -13,7 +13,7 @@ import server/state.{type State, State}
 /// Set `ctx.state.user` from the session, when someone is signed in.
 pub fn load(next: Handler(State)) -> Handler(State) {
   fn(req: Request, ctx: Context(State)) {
-    use s <- session.load(req, ctx.state.sessions)
+    use s <- session.load(req, ctx.sessions)
     let user =
       session.get(s, "user_id")
       |> result.try(int.parse)

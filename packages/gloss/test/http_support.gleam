@@ -10,6 +10,7 @@ import gleam/result
 import gloss/http/body
 import gloss/http/context.{type Context, type Handler, type Middleware, Context}
 import gloss/http/reply.{type Request, type Response}
+import gloss/http/session
 import gloss/http/traceparent
 import gloss/internal/http_reply_render as reply_render
 import gloss/logger
@@ -30,6 +31,7 @@ pub fn ctx(state: state) -> Context(state) {
     request_id: "test",
     trace: traceparent.new(),
     client_ip: "127.0.0.1",
+    sessions: session.unconfigured(),
     log: logger.discard(),
     tracer: tracer.new(),
   )

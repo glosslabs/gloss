@@ -10,9 +10,9 @@ pub fn main() -> Nil {
 
   let #(log, tracer) = reporters.setup(config)
   let assert Ok(notes) = notes.start()
-  let state = state.new(config, log:, tracer:, notes:)
+  let state = state.new(config, notes:)
 
-  let assert Ok(srv) = server.start(config, state)
+  let assert Ok(srv) = server.start(config, state, log:, tracer:)
   signal.wait_for_terminate()
   let _ = server.stop(srv)
   Nil

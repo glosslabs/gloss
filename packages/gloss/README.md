@@ -61,6 +61,15 @@ pub fn show(_req: Request, ctx: Context(App)) -> Response {
 }
 ```
 
+### Application state
+
+`server.new(routes, state)` takes the application's own services (its
+domain modules and their stores), which handlers reach as `ctx.state`. The
+server's infrastructure stays out of it and sits beside it on the context:
+`ctx.log`, `ctx.tracer` and `ctx.sessions` (given with `server.logger`,
+`server.tracer` and `server.sessions`). One state is the simple case;
+larger apps can give separate route groups their own state.
+
 ### Modules
 
 | Module | |

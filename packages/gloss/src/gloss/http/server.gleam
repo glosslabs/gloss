@@ -68,6 +68,7 @@ import gleam/time/timestamp
 import gloss/http/context.{type Handler, type Middleware, Context}
 import gloss/http/reply.{type ErrorPage, type Request}
 import gloss/http/router.{type RouteError, type Router}
+import gloss/http/session.{type Sessions}
 import gloss/http/traceparent.{type TraceParent}
 import gloss/internal/http_forwarded as forwarded
 import gloss/internal/http_reply_render.{type Wire} as reply_render
@@ -100,6 +101,7 @@ pub opaque type Builder(state) {
     on_started: List(fn(Started) -> Nil),
     on_stopped: List(fn(Stopped) -> Nil),
     error_page: fn(ErrorPage) -> String,
+    sessions: Sessions,
   )
 }
 
@@ -164,6 +166,7 @@ pub fn new(router: Router(state), state: state) -> Builder(state) {
     on_started: [],
     on_stopped: [],
     error_page: reply.default_error_page,
+    sessions: session.unconfigured(),
   )
 }
 
@@ -309,6 +312,12 @@ pub fn on_stopped(
   f: fn(Stopped) -> Nil,
 ) -> Builder(state) {
   Builder(..builder, on_stopped: list.append(builder.on_stopped, [f]))
+}
+
+/// The sessions handlers load with `session.load(req, ctx.sessions)`.
+/// Without them, every visitor is new and saving a session fails.
+pub fn sessions(builder: Builder(state), sessions: Sessions) -> Builder(state) {
+  Builder(..builder, sessions:)
 }
 
 /// Render error replies for clients that prefer HTML. The page is given
@@ -548,6 +557,7 @@ fn pipeline(
     middleware:,
     error_page:,
     trusted_proxies:,
+    sessions:,
     ..,
   ) = builder
   fn(request: Request, peer: String) {
@@ -577,6 +587,7 @@ fn pipeline(
         request_id:,
         trace:,
         client_ip: origin.client_ip,
+        sessions:,
         log: logger.with_context(log, log_context(request_id, trace, route)),
         tracer: tracer,
       )

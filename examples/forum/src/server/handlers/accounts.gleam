@@ -58,13 +58,13 @@ pub fn login(req: Request, ctx: Context(State)) -> Response {
 }
 
 pub fn logout(req: Request, ctx: Context(State)) -> Response {
-  use s <- session.load(req, ctx.state.sessions)
+  use s <- session.load(req, ctx.sessions)
   session.destroy(s, reply.redirect("/"))
 }
 
 /// Start a session for the user, under a fresh id.
 fn sign_in(req: Request, ctx: Context(State), user: User) -> Response {
-  use s <- session.load(req, ctx.state.sessions)
+  use s <- session.load(req, ctx.sessions)
   s
   |> session.regenerate
   |> session.set("user_id", int.to_string(user.id))

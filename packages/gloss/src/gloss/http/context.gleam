@@ -15,14 +15,17 @@
 import gleam/dict.{type Dict}
 import gleam/int
 import gloss/http/reply.{type Request, type Response}
+import gloss/http/session.{type Sessions}
 import gloss/http/traceparent.{type TraceParent}
 import gloss/logger.{type Logger}
 import gloss/tracer.{type Tracer}
 
 pub type Context(state) {
   Context(
-    /// The application's own context, as given to `server.new`. Middleware
-    /// may replace it, e.g. to attach the signed-in user.
+    /// The application's own services, as given to `server.new`: the
+    /// application owns this, while the server's own infrastructure (log,
+    /// tracer, sessions) sits beside it on the context. Middleware may
+    /// replace it, e.g. to attach the signed-in user.
     state: state,
     /// Path parameters captured by the route, percent-decoded.
     params: Dict(String, String),
@@ -42,6 +45,8 @@ pub type Context(state) {
     /// entry.
     log: Logger,
     tracer: Tracer,
+    /// The server's sessions (see `server.sessions`), for `session.load`.
+    sessions: Sessions,
   )
 }
 

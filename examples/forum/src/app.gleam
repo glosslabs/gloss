@@ -25,15 +25,9 @@ pub fn main() -> Nil {
       |> cookie.secure(config.environment != "development"),
     )
   let state =
-    state.new(
-      accounts:,
-      forum:,
-      sessions:,
-      avatars_dir: config.data_dir <> "/avatars",
-      log:,
-    )
+    state.new(accounts:, forum:, avatars_dir: config.data_dir <> "/avatars")
 
-  let assert Ok(srv) = server.start(config, state, tracer)
+  let assert Ok(srv) = server.start(config, state, log:, tracer:, sessions:)
   signal.wait_for_terminate()
   let _ = server.stop(srv)
   Nil
