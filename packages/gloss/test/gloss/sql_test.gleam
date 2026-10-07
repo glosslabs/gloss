@@ -108,6 +108,18 @@ pub fn transaction_rolls_back_on_error_test() {
   assert fake.drain(log) == ["connect", "BEGIN", "select broken", "ROLLBACK"]
 }
 
+pub fn flatten_merges_transaction_failures_test() {
+  let #(db, _) = start(1)
+  assert sql.transaction(db, fn(tx) { sql.exec(tx, sql.query("x")) })
+    |> sql.flatten
+    == Ok(1)
+  let assert Error(sql.QueryFailed(..)) =
+    sql.transaction(db, fn(tx) { sql.all(tx, sql.query("select broken")) })
+    |> sql.flatten
+  assert sql.flatten(Error(sql.TransactionFailed(sql.PoolTimeout)))
+    == Error(sql.PoolTimeout)
+}
+
 pub fn nested_transactions_are_savepoints_test() {
   let #(db, log) = start(1)
   let assert Ok(Error(sql.RolledBack("inner"))) =

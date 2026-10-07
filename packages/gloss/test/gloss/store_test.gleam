@@ -32,7 +32,7 @@ fn counter() -> store.Builder(Message) {
 }
 
 fn sleeper() -> store.Builder(Message) {
-  store.concurrent(Nil, fn(_, message) {
+  store.concurrent(fn(message) {
     case message {
       Slow(ms:, reply:) -> {
         process.sleep(ms)
@@ -78,10 +78,13 @@ pub fn a_named_store_is_reachable_from_its_name_test() {
   assert store.call(store.from_name(name), Add(4, _)) == 4
 }
 
-pub fn sql_errors_become_unavailable_test() {
-  assert store.from_sql(Ok(1)) == Ok(1)
-  assert store.from_sql(Error(sql.PoolTimeout))
-    == Error(Unavailable("timed out waiting for a connection"))
+pub fn reply_turns_sql_errors_into_unavailable_test() {
+  let reply = process.new_subject()
+  store.reply(Ok(1), to: reply)
+  store.reply(Error(sql.PoolTimeout), to: reply)
+  assert process.receive(reply, 0) == Ok(Ok(1))
+  assert process.receive(reply, 0)
+    == Ok(Error(Unavailable("timed out waiting for a connection")))
 }
 
 @external(erlang, "gloss@sql_ffi", "rescue")

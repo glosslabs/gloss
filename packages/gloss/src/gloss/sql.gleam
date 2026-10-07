@@ -655,6 +655,23 @@ pub fn transaction(
   }
 }
 
+/// The result of a transaction whose body fails with a `sql.Error`, with the
+/// two kinds of failure merged:
+///
+/// ```gleam
+/// sql.transaction(db, fn(tx) {
+///   use id <- result.try(sql.one(tx, insert_order))
+///   sql.exec(tx, insert_line(id))
+/// })
+/// |> sql.flatten
+/// ```
+pub fn flatten(result: Result(a, TransactionError(Error))) -> Result(a, Error) {
+  case result {
+    Ok(value) -> Ok(value)
+    Error(RolledBack(error)) | Error(TransactionFailed(error)) -> Error(error)
+  }
+}
+
 /// Run `body` between BEGIN and COMMIT, or a savepoint when `depth > 0`.
 /// Also says whether the connection is fit to reuse.
 fn transact(

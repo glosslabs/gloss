@@ -18,11 +18,10 @@
 //// }
 ////
 //// // In an adapter: answering from Postgres.
-//// store.concurrent(db, fn(db, message) {
+//// store.concurrent(fn(message) {
 ////   case message {
-////     Get(id:, reply:) ->
-////       process.send(reply, sql.optional(db, select(id)) |> store.from_sql)
-////     Save(user:, reply:) -> ...
+////     Get(id:, reply:) -> sql.optional(db, select(id)) |> store.reply(reply)
+////     Save(user:, reply:) -> sql.exec(db, update(user)) |> store.reply(reply)
 ////   }
 //// })
 //// |> store.start
@@ -30,17 +29,17 @@
 ////
 //// ## Concurrent and serial stores
 ////
-//// `concurrent` answers each message in a process of its own, sharing an
-//// immutable context such as a `sql.Db`, so a slow statement never holds
-//// up the next. `serial` answers one message at a time and keeps state
+//// `concurrent` answers each message in a process of its own, so a slow
+//// statement never holds up the next; the answering function captures
+//// what it needs, such as a `sql.Db`. `serial` answers one message at a time and keeps state
 //// between them, which suits a store held in memory.
 ////
 //// ## Failure
 ////
 //// Storage failing (the database being down) is rarely something the
 //// caller can act on, so it is not part of a message's answer type: an
-//// adapter answers `Error(Unavailable(reason))` and `call` panics with the
-//// reason. In a request handler that becomes a 500 that is logged and
+//// adapter's `sql.Error` is answered as `Unavailable(reason)` and `call`
+//// panics with the reason. In a request handler that becomes a 500 that is logged and
 //// traced. Business outcomes, such as an email already being taken, belong
 //// in the answer itself.
 ////
@@ -79,16 +78,13 @@ pub opaque type Builder(message) {
   )
 }
 
-/// A store that answers each message in a new process, with `context`.
-pub fn concurrent(
-  context: context,
-  answer: fn(context, message) -> Nil,
-) -> Builder(message) {
+/// A store that answers each message in a new process.
+pub fn concurrent(answer: fn(message) -> Nil) -> Builder(message) {
   Builder(name: None, start: fn(name) {
-    actor.new(context)
-    |> actor.on_message(fn(context, message) {
-      process.spawn_unlinked(fn() { answer(context, message) })
-      actor.continue(context)
+    actor.new(Nil)
+    |> actor.on_message(fn(_, message) {
+      process.spawn_unlinked(fn() { answer(message) })
+      actor.continue(Nil)
     })
     |> register(name)
     |> actor.start
@@ -155,11 +151,14 @@ pub fn call(store: Store(message), make: fn(Reply(a)) -> message) -> a {
   }
 }
 
-/// A `gloss/sql` result as a store's answer: a database error becomes
-/// `Unavailable`. Map the errors that are business outcomes, such as a
-/// `sql.UniqueViolation`, before calling it.
-pub fn from_sql(result: Result(a, sql.Error)) -> Result(a, Unavailable) {
-  result.map_error(result, fn(error) { Unavailable(sql.describe(error)) })
+/// Answer a message. A database error becomes `Unavailable`, so map the
+/// errors that are business outcomes, such as a `sql.UniqueViolation`,
+/// first. A store held in memory answers `Ok(value)`.
+pub fn reply(result: Result(a, sql.Error), to reply: Reply(a)) -> Nil {
+  process.send(
+    reply,
+    result.map_error(result, fn(error) { Unavailable(sql.describe(error)) }),
+  )
 }
 
 fn register(
