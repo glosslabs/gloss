@@ -1,5 +1,7 @@
 import app/config
+import app/db
 import app/logging
+import app/sentry
 import app/tracing
 import domain/accounts
 import domain/forum
@@ -8,8 +10,6 @@ import gloss/meta
 import gloss/signal
 import gloss/store
 import gloss/tracer
-import infra/db
-import infra/sentry
 import server
 import server/state
 import store/thread_store
@@ -18,7 +18,7 @@ import store/user_store
 pub fn main() -> Nil {
   let config = config.from_env()
   let log = logging.default(config)
-  let sentry = sentry.start(config.sentry_dsn, config.environment)
+  let sentry = sentry.start(config)
 
   let tracer =
     tracer.new()

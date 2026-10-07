@@ -25,15 +25,17 @@ open http://localhost:4000
 ## Layout
 
 The core of the application is separate from the web server and from
-outside services. `domain/` knows nothing of HTTP, HTML or Sentry;
-`server/` and `infra/` depend on it, never the reverse. `app/` is where
-they are composed.
+outside services. `domain/` knows nothing of HTTP, HTML, SQL or Sentry;
+`server/` and `store/` depend on it, never the reverse. `app/` starts the
+outside services (logging, Sentry, the database) and composes everything.
 
 | Module | |
 |---|---|
 | `app` | `main`: composes config, logging, tracing, the domain services and the server |
 | `app/config` | Settings from the environment |
 | `app/logging`, `app/tracing` | Where log entries go (console and rotated files); where trace events go (the log and Sentry) |
+| `app/sentry` | The Sentry client, started when `SENTRY_DSN` is set |
+| `app/db` | The Postgres connection pool, and the schema it creates at start |
 | `domain/accounts` | Registration, sign-in, profiles and avatars |
 | `domain/accounts/user` | User rules; passwords are hashed with `gloss/password` |
 | `domain/accounts/user_store` | The port for storing users: the messages a user store answers |
@@ -46,9 +48,7 @@ they are composed.
 | `server/handlers/*` | One module per area: accounts, threads, profile, users |
 | `server/middleware/current_user` | The signed-in user from the session |
 | `server/views/*` | Lustre views rendered to HTML |
-| `infra/db` | The Postgres connection pool, and the schema it creates at start |
 | `store/user_store`, `store/thread_store` | The stores, answered from Postgres |
-| `infra/sentry` | The Sentry client, started when `SENTRY_DSN` is set |
 
 ### Domains and stores
 

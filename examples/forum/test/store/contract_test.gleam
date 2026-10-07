@@ -1,13 +1,13 @@
 //// The store contract, against each adapter. The Postgres adapters
 //// run when TEST_DATABASE_URL is set; their tables are emptied first.
 
+import app/db
 import domain/accounts/user_store.{Inserted, NewUser}
 import envoy
 import gleam/time/timestamp
 import gloss/sql
 import gloss/store
 import gloss/tracer
-import infra/db
 import store/thread_store as postgres_threads
 import store/user_store as postgres_users
 import support/memory_threads
