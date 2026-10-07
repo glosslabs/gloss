@@ -41,7 +41,7 @@ import gleam/bit_array
 import gleam/crypto
 import gleam/erlang/atom.{type Atom}
 import gleam/list
-import gleam/option.{type Option, None}
+import gleam/option.{type Option, None, Some}
 import gleam/string
 import gleam/time/duration.{type Duration}
 import gleam/time/timestamp.{type Timestamp}
@@ -147,7 +147,27 @@ pub fn emit(tracer: Tracer, event: fn() -> Event) -> Nil {
   }
 }
 
-/// Emit a `Point` stamped with the current time, outside any span.
+/// The span the calling process is working in, if any: the one `span` or
+/// `with_current` is running. gloss/http makes each request's span current
+/// while its handler runs, so work done for a request, such as gloss/sql
+/// statements, joins the request's trace without being handed it.
+pub fn current() -> Option(SpanContext) {
+  current_ffi()
+}
+
+/// Run `work` with `context` as the calling process's current span.
+pub fn with_current(context: SpanContext, work: fn() -> a) -> a {
+  with_current_ffi(context, work)
+}
+
+@external(erlang, "gloss@tracer_ffi", "current")
+fn current_ffi() -> Option(SpanContext)
+
+@external(erlang, "gloss@tracer_ffi", "with_current")
+fn with_current_ffi(context: SpanContext, work: fn() -> a) -> a
+
+/// Emit a `Point` stamped with the current time, in the current span if
+/// there is one.
 pub fn point(
   tracer: Tracer,
   source source: String,
@@ -162,7 +182,7 @@ pub fn point(
     at: timestamp.system_time(),
     meta: meta(),
     level:,
-    trace: None,
+    trace: current(),
   )
 }
 
@@ -177,8 +197,10 @@ pub fn point(
 /// run_query(sql)
 /// ```
 ///
-/// The span starts a new trace. `work` is opaque to `span`: the span's
-/// `error` is always `None`, and nothing is emitted if `work` panics.
+/// The span is a child of the current span, or else starts a new trace,
+/// and is the current span while `work` runs. `work` is opaque to `span`:
+/// the span's `error` is always `None`, and nothing is emitted if `work`
+/// panics.
 pub fn span(
   tracer: Tracer,
   source source: String,
@@ -189,9 +211,14 @@ pub fn span(
   case enabled(tracer) {
     False -> work()
     True -> {
+      let parent = current()
+      let trace = case parent {
+        Some(parent) -> child(parent)
+        None -> root()
+      }
       let at = timestamp.system_time()
       let started = monotonic_ns()
-      let result = work()
+      let result = with_current(trace, work)
       let duration = duration.nanoseconds(monotonic_ns() - started)
       emit(tracer, fn() {
         Span(
@@ -201,8 +228,8 @@ pub fn span(
           meta: meta(),
           duration:,
           error: None,
-          trace: root(),
-          parent_span_id: None,
+          trace:,
+          parent_span_id: option.map(parent, fn(parent) { parent.span_id }),
         )
       })
       result

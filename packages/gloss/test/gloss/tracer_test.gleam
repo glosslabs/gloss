@@ -1,5 +1,5 @@
 import gleam/erlang/process
-import gleam/option.{None}
+import gleam/option.{None, Some}
 import gleam/order
 import gleam/string
 import gleam/time/duration
@@ -104,3 +104,36 @@ pub fn handlers_run_in_order_and_are_immutable_test() {
   tracer.emit(base, sample)
   drain(seen) |> should.equal([#("a", "thing.happened")])
 }
+
+pub fn spans_nest_under_the_current_span_test() {
+  let seen = process.new_subject()
+  let t = tracer.new() |> tracer.handle(process.send(seen, _))
+  assert tracer.current() == None
+  let outer = tracer.root()
+  tracer.with_current(outer, fn() {
+    use <- tracer.span(t, "test", "parent", fn() { [] })
+    // Inside a span, it is the current one.
+    let assert Some(inner) = tracer.current()
+    assert inner.trace_id == outer.trace_id
+    tracer.point(t, "test", "noted", tracer.Info, fn() { [] })
+  })
+  // The previous current span is restored.
+  assert tracer.current() == None
+
+  let assert [
+    tracer.Point(name: "noted", trace: Some(point_trace), ..),
+    tracer.Span(name: "parent", trace:, parent_span_id: Some(parent), ..),
+  ] = drain(seen)
+  assert parent == outer.span_id
+  assert trace.trace_id == outer.trace_id
+  assert point_trace == trace
+}
+
+pub fn the_current_span_is_restored_after_a_panic_test() {
+  let outer = tracer.root()
+  let _ = rescue(fn() { tracer.with_current(outer, fn() { panic as "boom" }) })
+  assert tracer.current() == None
+}
+
+@external(erlang, "gloss@http@server_ffi", "rescue")
+fn rescue(work: fn() -> a) -> Result(a, String)

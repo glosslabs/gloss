@@ -256,3 +256,20 @@ pub fn failed_statements_are_failed_spans_test() {
 
 @external(erlang, "gloss@sql_ffi", "rescue")
 fn rescue(work: fn() -> a) -> Result(a, b)
+
+pub fn statements_join_the_current_span_test() {
+  let spans = process.new_subject()
+  let log = process.new_subject()
+  let assert Ok(db) =
+    sql.new(fake.driver(log))
+    |> sql.tracer(tracer.new() |> tracer.handle(process.send(spans, _)))
+    |> sql.start
+  let request = tracer.root()
+  let assert Ok(_) =
+    tracer.with_current(request, fn() { sql.exec(db, sql.query("select 1")) })
+
+  let assert Ok(tracer.Span(trace:, parent_span_id: Some(parent), ..)) =
+    process.receive(spans, 100)
+  assert parent == request.span_id
+  assert trace.trace_id == request.trace_id
+}

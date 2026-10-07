@@ -64,8 +64,9 @@
 //// `"gloss.sql"`, named after its `label` or else its first SQL keyword
 //// (`"select"`, `"insert"`, ...), with `driver`, `sql` and `rows` in its
 //// meta. Transactions are spans named `"transaction"` whose statements are
-//// their children. Use `child_of` to put a request's statements in the
-//// request's trace.
+//// their children. Statements join the calling process's current span
+//// (`tracer.current`), so under gloss/http they are part of the request's
+//// trace; `child_of` names a parent explicitly.
 
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode.{type Decoder}
@@ -726,7 +727,7 @@ fn traced_transaction(
   case tracer.enabled(db.tracer) {
     False -> work(db)
     True -> {
-      let trace = span_context(db.parent)
+      let trace = span_context(parent(db))
       let at = timestamp.system_time()
       let started = monotonic_ns()
       let result = work(Db(..db, parent: Some(trace)))
@@ -744,7 +745,7 @@ fn traced_transaction(
           duration: duration.nanoseconds(monotonic_ns() - started),
           error:,
           trace:,
-          parent_span_id: option.map(db.parent, fn(parent) { parent.span_id }),
+          parent_span_id: option.map(parent(db), fn(parent) { parent.span_id }),
         )
       })
       result
@@ -821,13 +822,19 @@ fn traced(
           meta: list.append(meta(), [#("rows", meta.Int(rows))]),
           duration:,
           error:,
-          trace: span_context(db.parent),
-          parent_span_id: option.map(db.parent, fn(parent) { parent.span_id }),
+          trace: span_context(parent(db)),
+          parent_span_id: option.map(parent(db), fn(parent) { parent.span_id }),
         )
       })
       result
     }
   }
+}
+
+/// The span a statement belongs to: the one given with `child_of`, or else
+/// the calling process's current span (a request's, under gloss/http).
+fn parent(db: Db) -> Option(SpanContext) {
+  option.or(db.parent, tracer.current())
 }
 
 fn span_context(parent: Option(SpanContext)) -> SpanContext {

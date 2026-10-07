@@ -725,7 +725,13 @@ fn respond(
       )
     let handler = wrap(handler, middleware)
 
-    let #(response, failure) = case rescue(fn() { handler(request, ctx) }) {
+    // Work the handler does, such as queries, joins the request's span.
+    let current = traceparent.span_context(trace)
+    let #(response, failure) = case
+      rescue(fn() {
+        tracer.with_current(current, fn() { handler(request, ctx) })
+      })
+    {
       Ok(response) if response.status >= 500 -> #(
         response,
         Some("HTTP " <> int.to_string(response.status)),
