@@ -34,12 +34,20 @@ pub fn accept_key_test() {
 }
 
 pub fn parse_masked_text_test() {
-  frame.parse(<<client(1, 1, <<"hello":utf8>>):bits, "rest":utf8>>, 1000)
+  frame.parse(<<client(1, 1, <<"hello":utf8>>):bits, "rest":utf8>>, 1000, False)
   |> should.equal(
     Ok(
-      #(Frame(fin: True, opcode: TextFrame, payload: <<"hello":utf8>>), <<
-        "rest":utf8,
-      >>),
+      #(
+        Frame(
+          fin: True,
+          opcode: TextFrame,
+          payload: <<"hello":utf8>>,
+          compressed: False,
+        ),
+        <<
+          "rest":utf8,
+        >>,
+      ),
     ),
   )
 }
@@ -47,31 +55,31 @@ pub fn parse_masked_text_test() {
 pub fn parse_extended_length_test() {
   let payload = repeat(<<"ab":utf8>>, 100)
   let assert Ok(#(Frame(opcode: BinaryFrame, payload: got, ..), <<>>)) =
-    frame.parse(client(1, 2, payload), 1000)
+    frame.parse(client(1, 2, payload), 1000, False)
   got |> should.equal(payload)
 }
 
 pub fn parse_incomplete_test() {
   let whole = client(1, 1, <<"hello":utf8>>)
-  frame.parse(<<>>, 1000) |> should.equal(Error(Incomplete))
-  frame.parse(slice(whole, 3), 1000) |> should.equal(Error(Incomplete))
+  frame.parse(<<>>, 1000, False) |> should.equal(Error(Incomplete))
+  frame.parse(slice(whole, 3), 1000, False) |> should.equal(Error(Incomplete))
 }
 
 pub fn protocol_errors_test() {
   // Unmasked.
-  frame.parse(<<1:1, 0:3, 1:4, 0:1, 2:7, "hi":utf8>>, 1000)
+  frame.parse(<<1:1, 0:3, 1:4, 0:1, 2:7, "hi":utf8>>, 1000, False)
   |> should.equal(Error(Invalid(1002, "client frames must be masked")))
   // Reserved bits.
-  frame.parse(<<1:1, 4:3, 1:4, 1:1, 0:7, key:bits>>, 1000)
+  frame.parse(<<1:1, 4:3, 1:4, 1:1, 0:7, key:bits>>, 1000, False)
   |> should.equal(Error(Invalid(1002, "reserved bits set")))
   // Fragmented control frame.
-  frame.parse(client(0, 9, <<>>), 1000)
+  frame.parse(client(0, 9, <<>>), 1000, False)
   |> should.equal(Error(Invalid(1002, "fragmented control frame")))
   // Too big.
-  frame.parse(client(1, 2, <<"hello":utf8>>), 4)
+  frame.parse(client(1, 2, <<"hello":utf8>>), 4, False)
   |> should.equal(Error(Invalid(1009, "message too big")))
   // Unknown opcode.
-  frame.parse(client(1, 3, <<>>), 1000)
+  frame.parse(client(1, 3, <<>>), 1000, False)
   |> should.equal(Error(Invalid(1002, "unknown opcode 3")))
 }
 
@@ -109,3 +117,14 @@ fn slice(data: BitArray, length: Int) -> BitArray {
 
 @external(erlang, "gloss@http@server_ffi", "unmask")
 fn mask(key: BitArray, payload: BitArray) -> BitArray
+
+pub fn rsv1_marks_a_compressed_message_when_deflate_is_on_test() {
+  let compressed = <<1:1, 4:3, 1:4, 1:1, 0:7, key:bits>>
+  let assert Ok(#(Frame(compressed: True, ..), <<>>)) =
+    frame.parse(compressed, 1000, True)
+  // Control frames may never set it.
+  frame.parse(<<1:1, 4:3, 9:4, 1:1, 0:7, key:bits>>, 1000, True)
+  |> should.equal(Error(Invalid(1002, "reserved bits set")))
+  frame.encode_compressed(TextFrame, <<"x":utf8>>)
+  |> should.equal(<<0xC1, 1, "x":utf8>>)
+}

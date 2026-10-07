@@ -7,7 +7,7 @@ import gloss/testing/websocket
 fn start() -> #(server.Server, Int) {
   let routes =
     router.new()
-    |> router.get("/echo", fn(req, _) {
+    |> router.get("/echo", fn(req, ctx) {
       ws.new(
         on_init: fn(_) { #(Nil, None) },
         on_message: fn(state, conn, message) {
@@ -26,7 +26,7 @@ fn start() -> #(server.Server, Int) {
         },
         on_close: fn(_, _) { Nil },
       )
-      |> ws.upgrade(req)
+      |> ws.upgrade(req, ctx)
     })
   let assert Ok(srv) = server.new(routes, Nil) |> server.port(0) |> server.start
   #(srv, server.port_of(srv))

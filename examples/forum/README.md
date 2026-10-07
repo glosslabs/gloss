@@ -3,7 +3,8 @@
 A small server-rendered forum built with `gloss/http` and
 [Lustre](https://hexdocs.pm/lustre): register and sign in with an email and
 password, edit your profile and upload an avatar, start threads and reply to
-them. It exists to exercise gloss's HTTP and database features; styling is
+them. Readers with a thread open see new replies arrive over a WebSocket
+(`/threads/:id/live`, appended by `priv/static/live.js`). It exists to exercise gloss's HTTP and database features; styling is
 minimal. Users, threads and posts are stored in Postgres through
 `gloss/sql` and `gloss/pg`, and avatars on disk.
 

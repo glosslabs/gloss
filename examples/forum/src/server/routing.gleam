@@ -21,6 +21,7 @@ pub fn routes(
     |> router.post("/threads", threads.create)
     |> router.get("/threads/:id", threads.show)
     |> router.post("/threads/:id/replies", threads.reply)
+    |> router.get("/threads/:id/live", threads.live)
     |> router.get("/users/:id", users.show)
 
   let account =

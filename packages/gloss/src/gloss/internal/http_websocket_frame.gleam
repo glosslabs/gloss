@@ -15,7 +15,9 @@ pub type Opcode {
 }
 
 pub type Frame {
-  Frame(fin: Bool, opcode: Opcode, payload: BitArray)
+  /// `compressed` is the RSV1 bit: the first frame of a message compressed
+  /// with `permessage-deflate`.
+  Frame(fin: Bool, opcode: Opcode, payload: BitArray, compressed: Bool)
 }
 
 pub type ParseError {
@@ -27,9 +29,12 @@ pub type ParseError {
 
 /// The first whole frame in `data` and the bytes after it. Client frames
 /// must be masked; payloads longer than `max_payload` are refused with 1009.
+/// RSV1 is allowed on a text or binary frame only when `deflate` was
+/// negotiated; the other reserved bits never are.
 pub fn parse(
   data: BitArray,
   max_payload: Int,
+  deflate: Bool,
 ) -> Result(#(Frame, BitArray), ParseError) {
   case data {
     <<
@@ -42,8 +47,15 @@ pub fn parse(
     >> -> {
       use opcode <- result_try(decode_opcode(opcode))
       use #(length, rest) <- result_try(payload_length(len, rest))
+      let compressed = rsv == 4
+      let rsv1_allowed = case opcode {
+        TextFrame | BinaryFrame -> deflate
+        _ -> False
+      }
       case rsv, masked, opcode, fin {
-        r, _, _, _ if r != 0 -> Error(Invalid(1002, "reserved bits set"))
+        4, _, _, _ if !rsv1_allowed -> Error(Invalid(1002, "reserved bits set"))
+        r, _, _, _ if r != 0 && r != 4 ->
+          Error(Invalid(1002, "reserved bits set"))
         _, 0, _, _ -> Error(Invalid(1002, "client frames must be masked"))
         _, _, CloseFrame, _
         | _, _, PingFrame, _
@@ -58,7 +70,12 @@ pub fn parse(
           case rest {
             <<key:bytes-size(4), payload:bytes-size(length), after:bits>> ->
               Ok(#(
-                Frame(fin: fin == 1, opcode:, payload: unmask(key, payload)),
+                Frame(
+                  fin: fin == 1,
+                  opcode:,
+                  payload: unmask(key, payload),
+                  compressed:,
+                ),
                 after,
               ))
             _ -> Error(Incomplete)
@@ -97,6 +114,16 @@ fn decode_opcode(opcode: Int) -> Result(Opcode, ParseError) {
 
 /// An unfragmented, unmasked server frame.
 pub fn encode(opcode: Opcode, payload: BitArray) -> BitArray {
+  encode_frame(opcode, payload, 0)
+}
+
+/// An unfragmented server frame whose payload is compressed with
+/// `permessage-deflate` (RSV1 set).
+pub fn encode_compressed(opcode: Opcode, payload: BitArray) -> BitArray {
+  encode_frame(opcode, payload, 4)
+}
+
+fn encode_frame(opcode: Opcode, payload: BitArray, rsv: Int) -> BitArray {
   let code = case opcode {
     Continuation -> 0
     TextFrame -> 1
@@ -111,7 +138,7 @@ pub fn encode(opcode: Opcode, payload: BitArray) -> BitArray {
     n if n < 65_536 -> <<126:size(7), n:size(16)>>
     n -> <<127:size(7), n:size(64)>>
   }
-  <<1:size(1), 0:size(3), code:size(4), 0:size(1), length:bits, payload:bits>>
+  <<1:size(1), rsv:size(3), code:size(4), 0:size(1), length:bits, payload:bits>>
 }
 
 /// A close frame's payload: a status code and an optional reason.

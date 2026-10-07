@@ -1,6 +1,6 @@
 import domain/accounts/user.{type User}
 import domain/forum.{type Page}
-import domain/forum/thread.{type PostError, type Thread}
+import domain/forum/thread.{type Post, type PostError, type Thread}
 import gleam/dict.{type Dict}
 import gleam/int
 import gleam/list
@@ -66,23 +66,21 @@ pub fn show(
   [
     html.h1([], [html.text(thread.title)]),
     html.ol(
-      [attribute.class("posts")],
+      [
+        attribute.class("posts"),
+        // live.js appends replies others post while the page is open.
+        attribute.data(
+          "live",
+          "/threads/" <> int.to_string(thread.id) <> "/live",
+        ),
+      ],
       list.map(thread.posts, fn(post) {
-        html.li([attribute.id("post-" <> int.to_string(post.id))], [
-          html.header([], [
-            case dict.get(authors, post.author_id) {
-              Ok(author) ->
-                html.a([attribute.href("/users/" <> int.to_string(author.id))], [
-                  layout.avatar(author),
-                  html.text(author.display_name),
-                ])
-              Error(Nil) -> html.text("Someone")
-            },
-            html.small([], [html.text(" " <> layout.time(post.at))]),
-          ]),
-          html.p([attribute.class("body")], [html.text(post.body)]),
-        ])
+        post_item(post, dict.get(authors, post.author_id) |> option.from_result)
       }),
+    ),
+    html.script(
+      [attribute.src("/assets/live.js"), attribute.attribute("defer", "")],
+      "",
     ),
     case user {
       Some(_) ->
@@ -109,6 +107,24 @@ pub fn show(
         ])
     },
   ]
+}
+
+/// One post in a thread, as rendered on the page and pushed to live readers.
+pub fn post_item(post: Post, author: Option(User)) -> Element(Nil) {
+  html.li([attribute.id("post-" <> int.to_string(post.id))], [
+    html.header([], [
+      case author {
+        Some(author) ->
+          html.a([attribute.href("/users/" <> int.to_string(author.id))], [
+            layout.avatar(author),
+            html.text(author.display_name),
+          ])
+        None -> html.text("Someone")
+      },
+      html.small([], [html.text(" " <> layout.time(post.at))]),
+    ]),
+    html.p([attribute.class("body")], [html.text(post.body)]),
+  ])
 }
 
 pub fn new(

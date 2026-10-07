@@ -8,6 +8,8 @@ import gloss/http/body
 import gloss/http/context.{type Context}
 import gloss/http/query
 import gloss/http/reply.{type Request, type Response}
+import gloss/http/websocket
+import lustre/element
 import server/handlers/forms
 import server/middleware/current_user
 import server/state.{type State}
@@ -59,7 +61,15 @@ pub fn reply(req: Request, ctx: Context(State)) -> Response {
   case forum.reply(ctx.state.forum, id, user.id, text) {
     Ok(updated) -> {
       let anchor = case list.last(updated.posts) {
-        Ok(post) -> "#post-" <> int.to_string(post.id)
+        Ok(post) -> {
+          // Readers with the thread open see the reply arrive.
+          let _ =
+            websocket.broadcast_text(
+              live_group(id),
+              views.post_item(post, Some(user)) |> element.to_string,
+            )
+          "#post-" <> int.to_string(post.id)
+        }
         Error(Nil) -> ""
       }
       reply.redirect("/threads/" <> int.to_string(id) <> anchor)
@@ -68,6 +78,26 @@ pub fn reply(req: Request, ctx: Context(State)) -> Response {
     Error(forum.InvalidReply(error)) ->
       show_thread(ctx, id, 422, text, Some(views.post_error(error)))
   }
+}
+
+/// A socket that receives each new reply to the thread as HTML, for
+/// `live.js` to append.
+pub fn live(req: Request, ctx: Context(State)) -> Response {
+  use id <- context.int_param(ctx, "id")
+  websocket.new(
+    on_init: fn(conn) {
+      websocket.join(conn, live_group(id))
+      #(Nil, None)
+    },
+    // Readers only listen.
+    on_message: fn(state, _conn, _message) { websocket.continue(state) },
+    on_close: fn(_state, _reason) { Nil },
+  )
+  |> websocket.upgrade(req, ctx)
+}
+
+fn live_group(thread_id: Int) -> String {
+  "forum/thread/" <> int.to_string(thread_id)
 }
 
 fn show_thread(

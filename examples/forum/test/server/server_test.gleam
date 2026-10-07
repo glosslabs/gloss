@@ -5,6 +5,7 @@
 import app/config.{Config}
 import domain/accounts
 import domain/forum
+import gleam/erlang/process
 import gleam/int
 import gleam/list
 import gleam/string
@@ -15,6 +16,7 @@ import gloss/testing/browser.{type Browser}
 import gloss/testing/html
 import gloss/testing/request
 import gloss/testing/response
+import gloss/testing/websocket
 import gloss/tracer
 import server
 import server/state
@@ -24,6 +26,11 @@ import support/memory_users
 /// A fresh application with in-memory stores, as a function a browser can
 /// send requests to.
 fn app() -> fn(Request) -> response.Response {
+  let builder = app_builder()
+  gloss_server.handle(builder, _)
+}
+
+fn app_builder() -> gloss_server.Builder(state.State) {
   let data_dir =
     "build/test-data/"
     <> int.to_string(system_time())
@@ -37,14 +44,7 @@ fn app() -> fn(Request) -> response.Response {
       forum: forum.new(memory_threads.start()),
       avatars_dir: data_dir <> "/avatars",
     )
-  let builder =
-    server.builder(
-      config,
-      state,
-      logger: logger.discard(),
-      tracer: tracer.new(),
-    )
-  gloss_server.handle(builder, _)
+  server.builder(config, state, logger: logger.discard(), tracer: tracer.new())
 }
 
 /// The visible text of the page at `path`.
@@ -193,4 +193,27 @@ type UniqueOption {
 
 fn unique() -> Int {
   unique_integer([Positive])
+}
+
+pub fn readers_see_replies_arrive_live_test() {
+  // A real server for the reader's socket; replies posted through
+  // `handle` on the same application reach it.
+  let builder = app_builder()
+  let assert Ok(srv) = gloss_server.start(builder)
+  let app = gloss_server.handle(builder, _)
+
+  let ada = browser.new(app)
+  register(ada, "ada@example.com")
+  let _ =
+    browser.submit(ada, "/threads", [#("title", "Live"), #("body", "Watch")])
+
+  let assert Ok(reader) =
+    websocket.connect(gloss_server.port_of(srv), "/threads/1/live", [])
+  // The socket joins its group as it opens; give it a moment.
+  process.sleep(50)
+  let _ = browser.submit(ada, "/threads/1/replies", [#("body", "Hot off")])
+  let assert Ok(websocket.Text(post)) = websocket.receive(reader, 1000)
+  assert string.contains(post, "id=\"post-2\"")
+  assert html.text(post) |> string.contains("Hot off")
+  let _ = gloss_server.shutdown(srv)
 }
