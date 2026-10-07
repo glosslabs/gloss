@@ -1,5 +1,5 @@
 -module(ws_client_ffi).
--export([connect/2, send/4, recv/2, closed/2]).
+-export([connect/2, send/4, recv/2, closed/2, close/1]).
 
 %% A minimal WebSocket client for tests: connects, upgrades, and exchanges
 %% masked frames.
@@ -59,3 +59,7 @@ closed(S, Timeout) ->
         {error, closed} -> true;
         _ -> false
     end.
+
+close(S) ->
+    _ = gen_tcp:close(S),
+    nil.

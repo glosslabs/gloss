@@ -92,7 +92,7 @@ larger apps can give separate route groups their own state.
 | `gloss/http/static` | Files from a directory via `sendfile`, with content types, ETag revalidation, byte ranges (including multipart) for media, pre-compressed `.br`/`.gz` copies, and `cache-control` |
 | `gloss/http/sse` | Server-sent events over a streamed response |
 | `gloss/http/compress` | gzip middleware for JSON, text and streamed responses, by `accept-encoding` |
-| `gloss/http/websocket` | WebSocket upgrades: `on_init`/`on_message`/`on_close`, `send_text`/`send_binary`, messages from other processes |
+| `gloss/http/websocket` | WebSocket upgrades: `on_init`/`on_message`/`on_close` with a `CloseReason`, `send_text`/`send_binary`, messages from other processes, pings and idle timeouts, `close(code, reason)`, and cross-site upgrades refused |
 | `gloss/http/traceparent` | W3C Trace Context: continue or start a trace per request (`ctx.trace`), and propagate it to downstream calls |
 
 ### Errors follow the `Accept` header

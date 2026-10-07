@@ -26,15 +26,13 @@
 //// `"csrf.rejected"` from source `"gloss.http"`.
 
 import gleam/http
-import gleam/http/request
-import gleam/int
-import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{Some}
 import gleam/string
 import gleam/time/timestamp
 import gloss/http/context.{type Context, type Handler, type Middleware}
 import gloss/http/reply.{type Request}
 import gloss/http/traceparent
+import gloss/internal/http_origin as origin
 import gloss/meta
 import gloss/tracer
 
@@ -88,22 +86,9 @@ pub fn protect(next: Handler(state)) -> Handler(state) {
 
 /// Whether the request may proceed, or why not.
 pub fn check(config: Config, req: Request) -> Result(Nil, String) {
-  let origin = request.get_header(req, "origin")
-  let trusted = case origin {
-    Ok(origin) -> list.contains(config.trusted, string.lowercase(origin))
-    Error(Nil) -> False
-  }
-  case safe(req.method), request.get_header(req, "sec-fetch-site"), origin {
-    True, _, _ -> Ok(Nil)
-    _, _, _ if trusted -> Ok(Nil)
-    _, Ok("same-origin"), _ | _, Ok("none"), _ -> Ok(Nil)
-    _, Ok(site), _ -> Error("sec-fetch-site " <> site)
-    _, Error(Nil), Ok(origin) ->
-      case same_host(origin, host(req)) {
-        True -> Ok(Nil)
-        False -> Error("origin " <> origin)
-      }
-    _, Error(Nil), Error(Nil) -> Ok(Nil)
+  case safe(req.method) {
+    True -> Ok(Nil)
+    False -> origin.check(req, config.trusted)
   }
 }
 
@@ -111,38 +96,5 @@ fn safe(method: http.Method) -> Bool {
   case method {
     http.Get | http.Head | http.Options -> True
     _ -> False
-  }
-}
-
-/// The host the client asked for: `req.host` and `req.port`, which follow
-/// trusted proxies' forwarding headers (see `server.trust_proxies`).
-fn host(req: Request) -> Result(String, Nil) {
-  case req.host, req.port {
-    "", _ -> Error(Nil)
-    host, Some(port) -> Ok(host <> ":" <> int.to_string(port))
-    host, None -> Ok(host)
-  }
-}
-
-/// Whether `origin` (`scheme://host[:port]`) names the requested host,
-/// treating a missing port as the scheme's default.
-fn same_host(origin: String, host: Result(String, Nil)) -> Bool {
-  case string.split_once(string.lowercase(origin), "://"), host {
-    Ok(#(scheme, authority)), Ok(host) ->
-      with_port(authority, scheme) == with_port(string.lowercase(host), scheme)
-    _, _ -> False
-  }
-}
-
-fn with_port(authority: String, scheme: String) -> String {
-  // A bracketed IPv6 host contains colons; only a colon after `]` is a port.
-  let has_port = case string.split_once(authority, "]") {
-    Ok(#(_, rest)) -> string.starts_with(rest, ":")
-    Error(Nil) -> string.contains(authority, ":")
-  }
-  case has_port, scheme {
-    True, _ -> authority
-    False, "https" -> authority <> ":443"
-    False, _ -> authority <> ":80"
   }
 }
