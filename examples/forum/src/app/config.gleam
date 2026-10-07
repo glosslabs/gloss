@@ -14,6 +14,8 @@ pub type Config {
     /// Where `app.log` and `error.log` are written.
     log_dir: String,
     sentry_dsn: Option(String),
+    /// The Postgres database, as a `postgres://` URL.
+    database_url: String,
   )
 }
 
@@ -25,11 +27,12 @@ pub fn defaults() -> Config {
     data_dir: "data",
     log_dir: "log",
     sentry_dsn: None,
+    database_url: "postgres://postgres:postgres@localhost:5432/forum",
   )
 }
 
-/// The defaults, with `PORT`, `APP_ENV`, `DATA_DIR`, `LOG_DIR` and
-/// `SENTRY_DSN` applied over them where they are set.
+/// The defaults, with `PORT`, `APP_ENV`, `DATA_DIR`, `LOG_DIR`,
+/// `SENTRY_DSN` and `DATABASE_URL` applied over them where they are set.
 pub fn from_env() -> Config {
   let defaults = defaults()
   Config(
@@ -42,5 +45,7 @@ pub fn from_env() -> Config {
     sentry_dsn: envoy.get("SENTRY_DSN")
       |> option.from_result
       |> option.or(defaults.sentry_dsn),
+    database_url: envoy.get("DATABASE_URL")
+      |> result.unwrap(defaults.database_url),
   )
 }

@@ -3,11 +3,13 @@
 A small server-rendered forum built with `gloss/http` and
 [Lustre](https://hexdocs.pm/lustre): register and sign in with an email and
 password, edit your profile and upload an avatar, start threads and reply to
-them. It exists to exercise gloss's HTTP features; styling is minimal and
-everything but avatars is kept in memory, so it resets on restart.
+them. It exists to exercise gloss's HTTP and database features; styling is
+minimal. Users, threads and posts are stored in Postgres through
+`gloss/sql` and `gloss/pg`, and avatars on disk.
 
 ```sh
-mise run dev            # listens on :4000
+docker run -d --name forum-db -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=forum postgres:17
+mise run dev            # listens on :4000, creating the tables it needs
 open http://localhost:4000
 ```
 
@@ -18,6 +20,7 @@ open http://localhost:4000
 | `DATA_DIR` | `data` | Avatars are written to `DATA_DIR/avatars` |
 | `LOG_DIR` | `log` | Where `app.log` (debug, info) and `error.log` (warnings, errors) are written; each rotates at 10 MB, keeping 5 |
 | `SENTRY_DSN` | unset | Report failed requests and error events to Sentry |
+| `DATABASE_URL` | `postgres://postgres:postgres@localhost:5432/forum` | The Postgres database |
 
 ## Layout
 
@@ -33,15 +36,37 @@ they are composed.
 | `app/logging`, `app/tracing` | Where log entries go (console and rotated files); where trace events go (the log and Sentry) |
 | `domain/accounts` | Registration, sign-in, profiles and avatars |
 | `domain/accounts/user` | User rules; passwords are hashed with `gloss/password` |
+| `domain/accounts/user_repository` | The port for storing users: the messages a user repository answers |
 | `domain/forum` | Threads and replies |
 | `domain/forum/thread` | Thread and post rules |
+| `domain/forum/thread_repository` | The port for storing threads and posts |
+| `domain/repository` | What the ports share: `Unavailable`, and `call` |
 | `server` | The HTTP server: routes, CSRF protection, compression, error pages |
 | `server/state` | What handlers reach through `ctx.state`, including the signed-in user |
 | `server/routing` | The route table, and nothing else |
 | `server/handlers/*` | One module per area: accounts, threads, profile, users |
 | `server/middleware/current_user` | The signed-in user from the session |
 | `server/views/*` | Lustre views rendered to HTML |
+| `infra/db` | The Postgres connection pool, and the schema it creates at start |
+| `infra/db/users`, `infra/db/threads` | The repositories, answered from Postgres |
 | `infra/sentry` | The Sentry client, started when `SENTRY_DSN` is set |
+
+### Repositories
+
+Each aggregate has a repository port in the domain: a message type, such as
+`user_repository.Message` (`Insert`, `Get`, `FindByEmail`, `Save`, ...),
+that a repository process answers. The domain services keep the rules
+(validating input, hashing passwords, deciding timestamps) and send
+messages for storage; `infra/db/users` and `infra/db/threads` answer them
+with SQL, each message in a process of its own so statements run in
+parallel on the pool. The tests answer the same messages from memory
+(`test/support/memory_*`), and `test/support/repository_contract` checks
+that both adapters behave the same.
+
+Storage failing (the database being down) is not a domain outcome:
+`repository.call` panics, the server answers `500` and the failure reaches
+the log and Sentry. Business outcomes, such as an email being taken, are
+part of each message's answer.
 
 ## What it exercises
 
@@ -55,6 +80,12 @@ they are composed.
   (`gloss/http/compress`).
 - Query parameters for paging (`gloss/http/query`).
 - HTML error pages (`server.error_page`).
+- Postgres through `gloss/sql` and `gloss/pg`: statements with typed
+  decoders, transactions, `= any($1)` with arrays, unique-violation
+  mapping, and a span per statement in the log.
 
 `mise run test` runs the domain tests and the server tests, which drive the
-whole app through `server.handle` like a browser keeping its session cookie.
+whole app through `server.handle` like a browser keeping its session cookie,
+on the in-memory repositories. Set `TEST_DATABASE_URL` to also run the
+repository contract against Postgres; it empties the tables first, so give
+it a database of its own.

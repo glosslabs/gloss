@@ -20,6 +20,8 @@ import gloss/logger
 import gloss/tracer
 import server
 import server/state
+import support/memory_threads
+import support/memory_users
 
 type Browser {
   Browser(send: fn(reply.Request) -> Response(bytes_tree.BytesTree))
@@ -33,9 +35,12 @@ fn browser() -> #(Browser, String) {
     <> int.to_string(unique())
   let config =
     Config(..config.defaults(), port: 0, environment: "test", data_dir:)
-  let assert Ok(accounts) = accounts.start()
-  let assert Ok(forum) = forum.start()
-  let state = state.new(accounts:, forum:, avatars_dir: data_dir <> "/avatars")
+  let state =
+    state.new(
+      accounts: accounts.new(memory_users.start()),
+      forum: forum.new(memory_threads.start()),
+      avatars_dir: data_dir <> "/avatars",
+    )
   let builder =
     server.builder(
       config,

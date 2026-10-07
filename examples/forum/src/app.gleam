@@ -7,6 +7,9 @@ import gloss/http/server as http_server
 import gloss/meta
 import gloss/signal
 import gloss/tracer
+import infra/db
+import infra/db/threads
+import infra/db/users
 import infra/sentry
 import server
 import server/state
@@ -21,11 +24,16 @@ pub fn main() -> Nil {
     |> tracing.with_logger(log)
     |> tracing.with_sentry(sentry)
 
-  let assert Ok(accounts) = accounts.start()
-  let assert Ok(forum) = forum.start()
+  let assert Ok(db) = db.start(config.database_url, tracer)
+  let assert Ok(users) = users.start(db)
+  let assert Ok(threads) = threads.start(db)
 
   let state =
-    state.new(accounts:, forum:, avatars_dir: config.data_dir <> "/avatars")
+    state.new(
+      accounts: accounts.new(users),
+      forum: forum.new(threads),
+      avatars_dir: config.data_dir <> "/avatars",
+    )
 
   let assert Ok(srv) = server.start_with(config:, state:, logger: log, tracer:)
 

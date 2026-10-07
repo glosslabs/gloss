@@ -2,6 +2,7 @@ import domain/accounts
 import domain/accounts/user
 import gleam/option.{None, Some}
 import gleeunit/should
+import support/memory_users
 
 pub fn email_rules_test() {
   user.email("  Ada@Example.COM ") |> should.equal(Ok("ada@example.com"))
@@ -16,7 +17,7 @@ pub fn profile_rules_test() {
 }
 
 pub fn register_and_authenticate_test() {
-  let assert Ok(accounts) = accounts.start()
+  let accounts = accounts.new(memory_users.start())
   let assert Ok(ada) =
     accounts.register(accounts, "Ada@example.com", "correct horse")
   ada.display_name |> should.equal("ada")
@@ -34,7 +35,7 @@ pub fn register_and_authenticate_test() {
 }
 
 pub fn profile_and_avatar_test() {
-  let assert Ok(accounts) = accounts.start()
+  let accounts = accounts.new(memory_users.start())
   let assert Ok(ada) =
     accounts.register(accounts, "ada@example.com", "password1")
   let assert Ok(updated) =

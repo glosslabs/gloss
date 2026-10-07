@@ -3,9 +3,10 @@ import domain/forum/thread
 import gleam/int
 import gleam/list
 import gleeunit/should
+import support/memory_threads
 
 pub fn open_and_reply_test() {
-  let assert Ok(forum) = forum.start()
+  let forum = forum.new(memory_threads.start())
   let assert Ok(opened) = forum.open_thread(forum, 1, " Hello ", "First")
   opened.title |> should.equal("Hello")
   forum.open_thread(forum, 1, "", "x")
@@ -20,7 +21,7 @@ pub fn open_and_reply_test() {
 }
 
 pub fn pages_are_most_recently_active_first_test() {
-  let assert Ok(forum) = forum.start()
+  let forum = forum.new(memory_threads.start())
   list.each([1, 2, 3], fn(n) {
     let assert Ok(_) = forum.open_thread(forum, 1, "T" <> int.to_string(n), "x")
     Nil
