@@ -1,6 +1,6 @@
 import gleam/bytes_tree
 import gleam/option.{None, Some}
-import gloss/internal/pg_protocol as protocol
+import gloss/pg/internal/protocol
 
 pub fn decodes_a_data_row_with_a_null_test() {
   let buffer = <<"D":utf8, 16:32, 2:16, 2:32, "hi":utf8, -1:32, "rest":utf8>>

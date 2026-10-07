@@ -12,10 +12,10 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
-import gloss/database/sql
-import gloss/internal/pg_codec as codec
-import gloss/internal/pg_protocol.{type Message} as protocol
-import gloss/internal/pg_scram as scram
+import gloss/pg/internal/codec
+import gloss/pg/internal/protocol.{type Message}
+import gloss/pg/internal/scram
+import gloss/sql
 
 pub type Socket
 
@@ -753,10 +753,10 @@ fn now_ms() -> Int {
 @external(erlang, "erlang", "monotonic_time")
 fn monotonic_time(unit: Atom) -> Int
 
-@external(erlang, "gloss@database@pg_ffi", "connect")
+@external(erlang, "gloss@pg_ffi", "connect")
 fn ffi_connect(host: String, port: Int, timeout: Int) -> Result(Socket, String)
 
-@external(erlang, "gloss@database@pg_ffi", "upgrade")
+@external(erlang, "gloss@pg_ffi", "upgrade")
 fn ffi_upgrade(
   socket: Socket,
   host: String,
@@ -764,25 +764,25 @@ fn ffi_upgrade(
   timeout: Int,
 ) -> Result(Socket, String)
 
-@external(erlang, "gloss@database@pg_ffi", "send")
+@external(erlang, "gloss@pg_ffi", "send")
 fn ffi_send(socket: Socket, data: BytesTree) -> Result(Nil, String)
 
-@external(erlang, "gloss@database@pg_ffi", "recv")
+@external(erlang, "gloss@pg_ffi", "recv")
 fn ffi_recv(socket: Socket, timeout: Int) -> Result(BitArray, RecvError)
 
-@external(erlang, "gloss@database@pg_ffi", "alive")
+@external(erlang, "gloss@pg_ffi", "alive")
 fn ffi_alive(socket: Socket) -> Bool
 
-@external(erlang, "gloss@database@pg_ffi", "transfer")
+@external(erlang, "gloss@pg_ffi", "transfer")
 fn ffi_transfer(socket: Socket, pid: Pid) -> Nil
 
-@external(erlang, "gloss@database@pg_ffi", "close")
+@external(erlang, "gloss@pg_ffi", "close")
 fn ffi_close(socket: Socket) -> Nil
 
-@external(erlang, "gloss@database@pg_ffi", "activate")
+@external(erlang, "gloss@pg_ffi", "activate")
 fn ffi_activate(socket: Socket) -> Nil
 
-@external(erlang, "gloss@database@pg_ffi", "deactivate")
+@external(erlang, "gloss@pg_ffi", "deactivate")
 fn ffi_deactivate(socket: Socket) -> BitArray
 
 type RawSocketMessage {
@@ -791,22 +791,22 @@ type RawSocketMessage {
   RawOther
 }
 
-@external(erlang, "gloss@database@pg_ffi", "socket_message")
+@external(erlang, "gloss@pg_ffi", "socket_message")
 fn ffi_socket_message(socket: Socket, message: Dynamic) -> RawSocketMessage
 
-@external(erlang, "gloss@database@pg_ffi", "cache_new")
+@external(erlang, "gloss@pg_ffi", "cache_new")
 fn ffi_cache_new(size: Int) -> Cache
 
-@external(erlang, "gloss@database@pg_ffi", "cache_lookup")
+@external(erlang, "gloss@pg_ffi", "cache_lookup")
 fn ffi_cache_lookup(
   cache: Cache,
   sql: String,
 ) -> Result(#(String, List(Int)), Nil)
 
-@external(erlang, "gloss@database@pg_ffi", "cache_next_name")
+@external(erlang, "gloss@pg_ffi", "cache_next_name")
 fn ffi_cache_next_name(cache: Cache) -> String
 
-@external(erlang, "gloss@database@pg_ffi", "cache_put")
+@external(erlang, "gloss@pg_ffi", "cache_put")
 fn ffi_cache_put(
   cache: Cache,
   sql: String,
@@ -814,14 +814,14 @@ fn ffi_cache_put(
   types: List(Int),
 ) -> Nil
 
-@external(erlang, "gloss@database@pg_ffi", "cache_delete")
+@external(erlang, "gloss@pg_ffi", "cache_delete")
 fn ffi_cache_delete(cache: Cache, sql: String) -> Nil
 
-@external(erlang, "gloss@database@pg_ffi", "cache_take_closing")
+@external(erlang, "gloss@pg_ffi", "cache_take_closing")
 fn ffi_cache_take_closing(cache: Cache) -> List(String)
 
-@external(erlang, "gloss@database@pg_ffi", "cache_give")
+@external(erlang, "gloss@pg_ffi", "cache_give")
 fn ffi_cache_give(cache: Cache, pid: Pid) -> Nil
 
-@external(erlang, "gloss@database@pg_ffi", "cache_drop")
+@external(erlang, "gloss@pg_ffi", "cache_drop")
 fn ffi_cache_drop(cache: Cache) -> Nil

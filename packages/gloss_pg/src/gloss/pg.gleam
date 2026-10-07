@@ -1,4 +1,4 @@
-//// A Postgres driver for `gloss/database/sql`, speaking the wire protocol directly.
+//// A Postgres driver for `gloss/sql`, speaking the wire protocol directly.
 ////
 //// ```gleam
 //// let assert Ok(config) = pg.from_url("postgres://app:secret@db:5432/app")
@@ -85,10 +85,10 @@ import gleam/result
 import gleam/string
 import gleam/time/duration.{type Duration}
 import gleam/uri
-import gloss/database/sql
-import gloss/internal/pg_codec as codec
-import gloss/internal/pg_connection.{type PgConnection} as connection
-import gloss/internal/pg_listener
+import gloss/pg/internal/codec
+import gloss/pg/internal/connection.{type PgConnection}
+import gloss/pg/internal/listener_process
+import gloss/sql
 
 /// Where and how to connect. Build one with `new` or `from_url` and the
 /// setters, then give `driver(config)` to `sql.new`.
@@ -340,12 +340,12 @@ pub opaque type Listener {
 
 /// The listener process's messages, for naming it with `process.new_name`.
 pub type ListenerMessage =
-  pg_listener.Message(Notification)
+  listener_process.Message(Notification)
 
 /// Open a listener's connection and start it, linked to the calling
 /// process. Fails if the connection can't be opened.
 pub fn start_listener(config: Config) -> Result(Listener, sql.Error) {
-  case pg_listener.start(settings(config), Notification, None) {
+  case listener_process.start(settings(config), Notification, None) {
     Ok(started) -> Ok(Listener(started.data))
     Error(actor.InitFailed(reason)) -> Error(sql.ConnectionFailed(reason))
     Error(error) -> Error(sql.ConnectionFailed(string.inspect(error)))
@@ -360,7 +360,7 @@ pub fn supervised_listener(
   name: Name(ListenerMessage),
 ) -> ChildSpecification(Listener) {
   supervision.worker(fn() {
-    pg_listener.start(settings(config), Notification, Some(name))
+    listener_process.start(settings(config), Notification, Some(name))
     |> result.map(fn(started) {
       actor.Started(..started, data: Listener(started.data))
     })
@@ -380,7 +380,11 @@ pub fn listen(
   channel: String,
   subject: Subject(Notification),
 ) -> Result(Nil, sql.Error) {
-  process.call(listener.subject, 10_000, pg_listener.Listen(channel, subject, _))
+  process.call(listener.subject, 10_000, listener_process.Listen(
+    channel,
+    subject,
+    _,
+  ))
 }
 
 /// Stop sending notifications on `channel` to `subject`.
@@ -389,12 +393,12 @@ pub fn unlisten(
   channel: String,
   subject: Subject(Notification),
 ) -> Nil {
-  process.send(listener.subject, pg_listener.Unlisten(channel, subject))
+  process.send(listener.subject, listener_process.Unlisten(channel, subject))
 }
 
 /// Close the listener's connection and stop it.
 pub fn stop_listener(listener: Listener) -> Nil {
-  process.send(listener.subject, pg_listener.Stop)
+  process.send(listener.subject, listener_process.Stop)
 }
 
 // --- COPY --------------------------------------------------------------------
@@ -473,8 +477,8 @@ fn from_raw(connection: sql.Connection) -> Result(PgConnection, sql.Error) {
   ))
 }
 
-@external(erlang, "gloss@database@sql_ffi", "coerce")
+@external(erlang, "gloss@pg_ffi", "coerce")
 fn coerce(value: a) -> Dynamic
 
-@external(erlang, "gloss@database@pg_ffi", "pg_connection")
+@external(erlang, "gloss@pg_ffi", "pg_connection")
 fn ffi_connection(raw: Dynamic) -> Result(PgConnection, Nil)

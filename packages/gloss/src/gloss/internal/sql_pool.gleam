@@ -1,4 +1,4 @@
-//// The connection pool behind `gloss/database/sql`, an OTP actor.
+//// The connection pool behind `gloss/sql`, an OTP actor.
 ////
 //// The pool lends a connection to the calling process, which runs its
 //// statements on it directly and then gives it back. Results never pass
@@ -309,7 +309,7 @@ fn rescue(work: fn() -> a) -> Result(a, String) {
 
 type Crash
 
-@external(erlang, "gloss@database@sql_ffi", "rescue")
+@external(erlang, "gloss@sql_ffi", "rescue")
 fn rescue_crash(work: fn() -> a) -> Result(a, Crash)
 
 @external(erlang, "erlang", "element")
@@ -320,5 +320,5 @@ fn describe_crash(crash: Crash) -> String {
   string.inspect(element(3, crash))
 }
 
-@external(erlang, "gloss@database@sql_ffi", "try_send")
+@external(erlang, "gloss@sql_ffi", "try_send")
 fn try_send(subject: Subject(message), message: message) -> Bool

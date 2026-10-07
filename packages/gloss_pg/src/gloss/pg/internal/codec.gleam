@@ -19,7 +19,7 @@ import gleam/string
 import gleam/time/calendar
 import gleam/time/duration
 import gleam/time/timestamp
-import gloss/database/sql.{type Value}
+import gloss/sql.{type Value}
 
 // --- Arguments ---------------------------------------------------------------
 

@@ -9,8 +9,8 @@ import gleam/result
 import gleam/time/calendar
 import gleam/time/duration
 import gleam/time/timestamp
-import gloss/database/pg
-import gloss/database/sql
+import gloss/pg
+import gloss/sql
 
 fn with_db(size: Int, test_: fn(sql.Db) -> Nil) -> Nil {
   case getenv("GLOSS_TEST_PG_URL") {

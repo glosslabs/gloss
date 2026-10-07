@@ -22,6 +22,7 @@ jobs:
           [
             packages/gloss,
             packages/gloss_sentry,
+            packages/gloss_pg,
             template,
             examples/json_api,
             examples/forum,

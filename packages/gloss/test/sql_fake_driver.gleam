@@ -4,7 +4,7 @@
 
 import gleam/dynamic
 import gleam/erlang/process.{type Subject}
-import gloss/database/sql
+import gloss/sql
 
 pub fn driver(log: Subject(String)) -> sql.Driver {
   sql.Driver(name: "fake", placeholder: fn(_) { "?" }, connect: fn() {

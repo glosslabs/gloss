@@ -15,9 +15,9 @@ import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 import gleam/string
-import gloss/database/sql
-import gloss/internal/pg_connection.{type Socket} as connection
-import gloss/internal/pg_protocol as protocol
+import gloss/pg/internal/connection.{type Socket}
+import gloss/pg/internal/protocol
+import gloss/sql
 
 pub type Message(n) {
   Listen(

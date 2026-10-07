@@ -1,6 +1,6 @@
 //// A database layer shared by every gloss driver: one API for statements,
 //// rows, transactions and pooling, with the database-specific work done by
-//// a `Driver` such as `gloss/database/pg`.
+//// a `Driver` such as `gloss/pg` from the `gloss_pg` package.
 ////
 //// ```gleam
 //// let assert Ok(config) = pg.from_url("postgres://app:secret@localhost/app")
@@ -828,25 +828,25 @@ fn monotonic_ns() -> Int {
 
 type Crash
 
-@external(erlang, "gloss@database@sql_ffi", "rescue")
+@external(erlang, "gloss@sql_ffi", "rescue")
 fn rescue(work: fn() -> a) -> Result(a, Crash)
 
-@external(erlang, "gloss@database@sql_ffi", "reraise")
+@external(erlang, "gloss@sql_ffi", "reraise")
 fn reraise(crash: Crash) -> a
 
-@external(erlang, "gloss@database@sql_ffi", "row")
+@external(erlang, "gloss@sql_ffi", "row")
 fn ffi_row(cells: List(Dynamic)) -> Dynamic
 
-@external(erlang, "gloss@database@sql_ffi", "coerce")
+@external(erlang, "gloss@sql_ffi", "coerce")
 fn coerce(value: a) -> Dynamic
 
-@external(erlang, "gloss@database@sql_ffi", "timestamp")
+@external(erlang, "gloss@sql_ffi", "timestamp")
 fn ffi_timestamp(data: Dynamic) -> Result(timestamp.Timestamp, Nil)
 
-@external(erlang, "gloss@database@sql_ffi", "date")
+@external(erlang, "gloss@sql_ffi", "date")
 fn ffi_date(data: Dynamic) -> Result(calendar.Date, Nil)
 
-@external(erlang, "gloss@database@sql_ffi", "time_of_day")
+@external(erlang, "gloss@sql_ffi", "time_of_day")
 fn ffi_time_of_day(data: Dynamic) -> Result(calendar.TimeOfDay, Nil)
 
 @external(erlang, "erlang", "monotonic_time")

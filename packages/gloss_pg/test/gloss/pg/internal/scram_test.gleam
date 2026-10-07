@@ -1,4 +1,4 @@
-import gloss/internal/pg_scram as scram
+import gloss/pg/internal/scram
 
 // The exchange from RFC 7677, section 3.
 pub fn rfc_7677_exchange_test() {
