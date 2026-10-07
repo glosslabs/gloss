@@ -36,7 +36,7 @@ outside services (logging, Sentry, the database) and composes everything.
 | `app` | `main`: composes config, logging, tracing, the domain services and the server |
 | `app/config` | Settings from the environment |
 | `app/logging`, `app/tracing` | Where log entries go (console and rotated files); where trace events go (the log, Sentry and OpenTelemetry) |
-| `app/debug` | The debug bar at the foot of each page, when `APP_ENV` is `development` |
+| `app/debug` | In development (`APP_ENV`): the debug bar at the foot of each page, and reloading code and pages when `src` or `priv` changes |
 | `app/otel` | The OpenTelemetry exporter, started when `OTEL_EXPORTER_OTLP_ENDPOINT` is set |
 | `app/sentry` | The Sentry client, started when `SENTRY_DSN` is set |
 | `app/db` | The Postgres connection pool, and the schema it creates at start |

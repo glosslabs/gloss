@@ -14,6 +14,7 @@ gleam-lang packages.
 | `gloss/logger/file` | A log channel that appends to a file and rotates it by size |
 | `gloss/meta` | Key/value metadata shared by the tracer and logger |
 | `gloss/scheduler` | Interval and cron tasks |
+| `gloss/reload` | Development reloading: rebuild on source changes, load the new code into the running node, and refresh pages (or show the compiler's errors over them) |
 | `gloss/signal` | SIGTERM/SIGHUP delivery for graceful shutdown |
 | `gloss/clock` | The current time as a value code is given (`system`, `fixed`, `new`), so tests can control it |
 | `gloss/id` | Id generators code is given: `uuid_v7(clock)`, `uuid_v4()`, or your own with `new` |

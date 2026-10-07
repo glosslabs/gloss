@@ -45,10 +45,11 @@ pub fn main() -> Nil {
       avatars_dir: config.data_dir <> "/avatars",
     )
 
+  let reloader = debug.reloader(config, tracer)
   let logger = tracing.handler_logger(log, otel:, debug_bar: bar)
   let assert Ok(srv) =
     server.builder(config:, state:, logger:, tracer:)
-    |> debug.with_panel(bar)
+    |> debug.with_pages(bar, reloader)
     |> http_server.start
 
   signal.wait_for_terminate()

@@ -1,5 +1,5 @@
 -module(http_client_ffi).
--export([connect/1, connect_unix/1, make_file/1, stale_socket/1, exists/1, send/2, read_response/2, read_head/2, is_closed/2, close/1]).
+-export([connect/1, recv_until/3, connect_unix/1, make_file/1, stale_socket/1, exists/1, send/2, read_response/2, read_head/2, is_closed/2, close/1]).
 
 %% A minimal HTTP/1.1 client over a raw socket, for exercising the server's
 %% connection handling.
@@ -28,6 +28,18 @@ stale_socket(Path) ->
     nil.
 
 exists(Path) -> element(1, file:read_link_info(Path)) =:= ok.
+
+%% Read raw bytes until Needle has arrived: {ok, AllRead} or {error, nil}.
+recv_until(Socket, Needle, Timeout) -> recv_until(Socket, Needle, Timeout, <<>>).
+recv_until(Socket, Needle, Timeout, Acc) ->
+    case binary:match(Acc, Needle) of
+        nomatch ->
+            case gen_tcp:recv(Socket, 0, Timeout) of
+                {ok, Data} -> recv_until(Socket, Needle, Timeout, <<Acc/binary, Data/binary>>);
+                {error, _} -> {error, nil}
+            end;
+        _ -> {ok, Acc}
+    end.
 
 send(Socket, Data) ->
     ok = gen_tcp:send(Socket, Data),
