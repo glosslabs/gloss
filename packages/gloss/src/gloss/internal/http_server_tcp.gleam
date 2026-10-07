@@ -27,6 +27,8 @@ pub type Event {
   Header(name: String, value: String)
   EndOfHeaders
   BadRequest(line: String)
+  /// The request line or a header line is longer than the server reads.
+  LineTooLong
   ConnectionClosed
   /// The server asked this connection to finish up.
   Drain

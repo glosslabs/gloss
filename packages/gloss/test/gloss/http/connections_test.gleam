@@ -18,7 +18,7 @@ fn builder(max: option.Option(Int)) -> Builder(Nil) {
   |> server.max_connections(max)
 }
 
-const get = "GET / HTTP/1.1\r\n\r\n"
+const get = "GET / HTTP/1.1\r\nhost: localhost\r\n\r\n"
 
 /// Connect and complete one request, so the server holds the connection.
 fn served(port: Int) -> Socket {

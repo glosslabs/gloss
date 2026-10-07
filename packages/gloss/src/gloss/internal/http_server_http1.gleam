@@ -115,7 +115,35 @@ pub fn chunk(data: BytesTree) -> BytesTree {
 /// Ends a chunked response, with no trailers.
 pub const last_chunk = "0\r\n\r\n"
 
+/// A request the server must refuse whatever the route.
+pub type HeadError {
+  /// HTTP/1.1 requires exactly one `Host` header; HTTP/1.0 allows none.
+  MissingHost
+  MultipleHosts
+  /// An `Expect` other than `100-continue`, answered `417`.
+  UnknownExpectation(String)
+}
+
+/// Check the parts of the head every HTTP/1.1 server must enforce.
+pub fn check(head: Head) -> Result(Nil, HeadError) {
+  case header_values(head, "host"), head.version {
+    [], #(1, 1) -> Error(MissingHost)
+    [_, _, ..], _ -> Error(MultipleHosts)
+    _, _ ->
+      case header_values(head, "expect") {
+        [] -> Ok(Nil)
+        [value] ->
+          case string.lowercase(string.trim(value)) {
+            "100-continue" -> Ok(Nil)
+            _ -> Error(UnknownExpectation(value))
+          }
+        values -> Error(UnknownExpectation(string.join(values, ", ")))
+      }
+  }
+}
+
 /// Whether the client wants a `100 Continue` before sending the body.
+/// HTTP/1.0 clients can't ask for one.
 pub fn expects_continue(head: Head) -> Bool {
   head.version == #(1, 1)
   && case list.key_find(head.headers, "expect") {

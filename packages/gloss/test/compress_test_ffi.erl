@@ -7,7 +7,7 @@ gunzip(Data) ->
 %% Connect, ask for a gzipped stream, and inflate only its first chunk.
 first_chunk_text(Port, Path) ->
     {ok, S} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}], 1000),
-    ok = gen_tcp:send(S, [<<"GET ">>, Path, <<" HTTP/1.1\r\naccept-encoding: gzip\r\n\r\n">>]),
+    ok = gen_tcp:send(S, [<<"GET ">>, Path, <<" HTTP/1.1\r\nhost: localhost\r\naccept-encoding: gzip\r\n\r\n">>]),
     ok = inet:setopts(S, [{packet, http_bin}]),
     {ok, {http_response, _, 200, _}} = gen_tcp:recv(S, 0, 1000),
     skip_headers(S),

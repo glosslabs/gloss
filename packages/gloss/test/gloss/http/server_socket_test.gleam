@@ -3,6 +3,7 @@ import gleam/erlang/process
 import gleam/int
 import gleam/list
 import gleam/otp/static_supervisor
+import gleam/string
 import gleam/time/duration
 import gleeunit/should
 import gloss/http/body
@@ -110,7 +111,10 @@ pub fn keep_alive_serves_several_requests_test() {
 pub fn connection_close_is_honoured_test() {
   let #(srv, port) = start(builder())
   let assert Ok(socket) = connect(port)
-  send(socket, "GET /hello HTTP/1.1\r\nconnection: close\r\n\r\n")
+  send(
+    socket,
+    "GET /hello HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n",
+  )
   let assert Ok(reply) = read_response(socket, 1000)
   header(reply, "connection") |> should.equal("close")
   is_closed(socket, 1000) |> should.be_true
@@ -120,7 +124,10 @@ pub fn connection_close_is_honoured_test() {
 pub fn body_is_read_test() {
   let #(srv, port) = start(builder())
   let assert Ok(socket) = connect(port)
-  send(socket, "POST /echo HTTP/1.1\r\ncontent-length: 5\r\n\r\nhello")
+  send(
+    socket,
+    "POST /echo HTTP/1.1\r\nhost: localhost\r\ncontent-length: 5\r\n\r\nhello",
+  )
   let assert Ok(reply) = read_response(socket, 1000)
   reply.2 |> should.equal(<<"hello">>)
   close(socket)
@@ -132,7 +139,7 @@ pub fn expect_continue_test() {
   let assert Ok(socket) = connect(port)
   send(
     socket,
-    "POST /echo HTTP/1.1\r\ncontent-length: 2\r\nexpect: 100-continue\r\n\r\n",
+    "POST /echo HTTP/1.1\r\nhost: localhost\r\ncontent-length: 2\r\nexpect: 100-continue\r\n\r\n",
   )
   let assert Ok(continue) = read_response(socket, 1000)
   continue.0 |> should.equal(100)
@@ -146,7 +153,7 @@ pub fn expect_continue_test() {
 pub fn head_request_has_no_body_test() {
   let #(srv, port) = start(builder())
   let assert Ok(socket) = connect(port)
-  send(socket, "HEAD /hello HTTP/1.1\r\n\r\n")
+  send(socket, "HEAD /hello HTTP/1.1\r\nhost: localhost\r\n\r\n")
   send(socket, get("/missing"))
   // The HEAD response announces 5 bytes but sends none, so the next
   // response follows its headers directly.
@@ -165,7 +172,10 @@ fn read_head(socket: Socket, timeout: Int) -> Result(Reply, Nil)
 pub fn body_too_large_test() {
   let #(srv, port) = start(builder() |> server.max_body(4))
   let assert Ok(socket) = connect(port)
-  send(socket, "POST /echo HTTP/1.1\r\ncontent-length: 5\r\n\r\nhello")
+  send(
+    socket,
+    "POST /echo HTTP/1.1\r\nhost: localhost\r\ncontent-length: 5\r\n\r\nhello",
+  )
   let assert Ok(reply) = read_response(socket, 1000)
   reply.0 |> should.equal(413)
   is_closed(socket, 1000) |> should.be_true
@@ -177,7 +187,7 @@ pub fn chunked_body_is_read_test() {
   let assert Ok(socket) = connect(port)
   send(
     socket,
-    "POST /echo HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n"
+    "POST /echo HTTP/1.1\r\nhost: localhost\r\ntransfer-encoding: chunked\r\n\r\n"
       <> "5\r\nhello\r\n6;ext=1\r\n world\r\n0\r\nx-trailer: 1\r\n\r\n",
   )
   let assert Ok(reply) = read_response(socket, 1000)
@@ -195,7 +205,7 @@ pub fn chunked_body_too_large_test() {
   let assert Ok(socket) = connect(port)
   send(
     socket,
-    "POST /echo HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n"
+    "POST /echo HTTP/1.1\r\nhost: localhost\r\ntransfer-encoding: chunked\r\n\r\n"
       <> "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n",
   )
   let assert Ok(reply) = read_response(socket, 1000)
@@ -211,7 +221,10 @@ pub fn unsupported_transfer_coding_test() {
       |> server.tracer(tracer.new() |> tracer.handle(process.send(events, _))),
     )
   let assert Ok(socket) = connect(port)
-  send(socket, "POST /echo HTTP/1.1\r\ntransfer-encoding: gzip\r\n\r\n")
+  send(
+    socket,
+    "POST /echo HTTP/1.1\r\nhost: localhost\r\ntransfer-encoding: gzip\r\n\r\n",
+  )
   let assert Ok(reply) = read_response(socket, 1000)
   reply.0 |> should.equal(501)
   let _ = server.shutdown(srv)
@@ -230,7 +243,7 @@ pub fn conflicting_framing_is_rejected_test() {
   let assert Ok(socket) = connect(port)
   send(
     socket,
-    "POST /echo HTTP/1.1\r\ntransfer-encoding: chunked\r\ncontent-length: 5\r\n\r\n",
+    "POST /echo HTTP/1.1\r\nhost: localhost\r\ntransfer-encoding: chunked\r\ncontent-length: 5\r\n\r\n",
   )
   let assert Ok(reply) = read_response(socket, 1000)
   reply.0 |> should.equal(400)
@@ -280,7 +293,7 @@ pub fn header_timeout_test() {
   let #(srv, port) =
     start(builder() |> server.header_timeout(duration.milliseconds(100)))
   let assert Ok(socket) = connect(port)
-  send(socket, "GET /hello HTTP/1.1\r\n")
+  send(socket, "GET /hello HTTP/1.1\r\nhost: localhost\r\n")
   let assert Ok(reply) = read_response(socket, 1000)
   reply.0 |> should.equal(408)
   let _ = server.shutdown(srv)
@@ -363,11 +376,93 @@ pub fn connection_rejections_follow_accept_test() {
   let assert Ok(socket) = connect(port)
   send(
     socket,
-    "POST /echo HTTP/1.1\r\naccept: text/plain\r\ncontent-length: 5\r\n\r\nhello",
+    "POST /echo HTTP/1.1\r\nhost: localhost\r\naccept: text/plain\r\ncontent-length: 5\r\n\r\nhello",
   )
   let assert Ok(reply) = read_response(socket, 1000)
   reply.0 |> should.equal(413)
   header(reply, "content-type") |> should.equal("text/plain; charset=utf-8")
   reply.2 |> should.equal(<<"content too large">>)
+  let _ = server.shutdown(srv)
+}
+
+pub fn missing_host_is_rejected_test() {
+  let #(srv, port) = start(builder())
+  let assert Ok(socket) = connect(port)
+  send(socket, "GET /hello HTTP/1.1\r\n\r\n")
+  let assert Ok(reply) = read_response(socket, 1000)
+  reply.0 |> should.equal(400)
+  is_closed(socket, 1000) |> should.be_true
+  let _ = server.shutdown(srv)
+}
+
+pub fn http_1_0_needs_no_host_test() {
+  let #(srv, port) = start(builder())
+  let assert Ok(socket) = connect(port)
+  send(socket, "GET /hello HTTP/1.0\r\n\r\n")
+  let assert Ok(reply) = read_response(socket, 1000)
+  reply.0 |> should.equal(200)
+  let _ = server.shutdown(srv)
+}
+
+pub fn two_hosts_are_rejected_test() {
+  let #(srv, port) = start(builder())
+  let assert Ok(socket) = connect(port)
+  send(socket, "GET /hello HTTP/1.1\r\nhost: a\r\nhost: b\r\n\r\n")
+  let assert Ok(reply) = read_response(socket, 1000)
+  reply.0 |> should.equal(400)
+  let _ = server.shutdown(srv)
+}
+
+pub fn long_uri_is_rejected_test() {
+  let #(srv, port) = start(builder())
+  let assert Ok(socket) = connect(port)
+  let path = "/" <> string.repeat("a", 20_000)
+  send(socket, get(path))
+  let assert Ok(reply) = read_response(socket, 1000)
+  reply.0 |> should.equal(414)
+  let _ = server.shutdown(srv)
+}
+
+pub fn long_header_is_rejected_test() {
+  let #(srv, port) = start(builder())
+  let assert Ok(socket) = connect(port)
+  let big = string.repeat("a", 20_000)
+  send(
+    socket,
+    "GET /hello HTTP/1.1\r\nhost: localhost\r\nx-big: " <> big <> "\r\n\r\n",
+  )
+  let assert Ok(reply) = read_response(socket, 1000)
+  reply.0 |> should.equal(431)
+  let _ = server.shutdown(srv)
+}
+
+pub fn unknown_expectation_is_rejected_test() {
+  let #(srv, port) = start(builder())
+  let assert Ok(socket) = connect(port)
+  send(
+    socket,
+    "POST /echo HTTP/1.1\r\nhost: localhost\r\nexpect: 200-ok\r\ncontent-length: 2\r\n\r\nhi",
+  )
+  let assert Ok(reply) = read_response(socket, 1000)
+  reply.0 |> should.equal(417)
+  let _ = server.shutdown(srv)
+}
+
+pub fn pipelined_requests_are_answered_in_order_test() {
+  let #(srv, port) = start(builder())
+  let assert Ok(socket) = connect(port)
+  send(
+    socket,
+    get("/hello")
+      <> "POST /echo HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4\r\n\r\npipe"
+      <> get("/missing"),
+  )
+  let assert Ok(first) = read_response(socket, 1000)
+  first.2 |> should.equal(<<"hello">>)
+  let assert Ok(second) = read_response(socket, 1000)
+  second.2 |> should.equal(<<"pipe">>)
+  let assert Ok(third) = read_response(socket, 1000)
+  third.0 |> should.equal(404)
+  close(socket)
   let _ = server.shutdown(srv)
 }

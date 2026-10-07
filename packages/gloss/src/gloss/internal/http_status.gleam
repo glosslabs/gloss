@@ -30,6 +30,8 @@ pub fn reason(status: Int) -> String {
     413 -> "Content Too Large"
     414 -> "URI Too Long"
     415 -> "Unsupported Media Type"
+    416 -> "Range Not Satisfiable"
+    417 -> "Expectation Failed"
     422 -> "Unprocessable Content"
     429 -> "Too Many Requests"
     431 -> "Request Header Fields Too Large"

@@ -477,7 +477,9 @@ fn report_problem(tracer: Tracer, problem: connection.Problem) -> Nil {
   use <- tracer.point(tracer, source:, name:, level:)
   let reason = [#("reason", meta.String(connection.message(problem)))]
   case problem {
-    connection.Malformed(detail:) | connection.HandlerCrashed(reason: detail) -> [
+    connection.Malformed(detail:)
+    | connection.HandlerCrashed(reason: detail)
+    | connection.UnknownExpectation(value: detail) -> [
       #("detail", meta.String(detail)),
       ..reason
     ]

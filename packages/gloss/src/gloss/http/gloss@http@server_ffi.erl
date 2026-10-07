@@ -15,6 +15,8 @@
 
 %% Listen in `http_bin` packet mode, passive. Accepted sockets inherit the
 %% options. `packet_size` bounds the request line and each header line.
+%% `exit_on_close` is off so the socket can still answer 414 or 431 after a
+%% line exceeds it; connections always close their sockets themselves.
 listen(Interface, Port, Backlog) ->
     case inet:parse_address(binary_to_list(Interface)) of
         {error, _} ->
@@ -25,7 +27,8 @@ listen(Interface, Port, Backlog) ->
                        {packet_size, 16384}, {active, false},
                        {reuseaddr, true}, {nodelay, true},
                        {backlog, Backlog}, {send_timeout, 30000},
-                       {send_timeout_close, true}],
+                       {send_timeout_close, true},
+                       {exit_on_close, false}],
             case gen_tcp:listen(Port, Options) of
                 {ok, Socket} -> {ok, Socket};
                 {error, eaddrinuse} -> {error, address_in_use};
@@ -115,6 +118,8 @@ next(Socket, Timeout) ->
             end_of_headers;
         {http, Socket, {http_error, Line}} ->
             {bad_request, to_binary(Line)};
+        {tcp_error, Socket, emsgsize} ->
+            line_too_long;
         {tcp_closed, Socket} ->
             connection_closed;
         {tcp_error, Socket, _} ->

@@ -40,7 +40,7 @@ fn builder(timeout_ms: Int) -> Builder(Nil) {
 }
 
 fn get(path: String) -> String {
-  "GET " <> path <> " HTTP/1.1\r\n\r\n"
+  "GET " <> path <> " HTTP/1.1\r\nhost: localhost\r\n\r\n"
 }
 
 pub fn slow_handlers_are_stopped_test() {
@@ -75,7 +75,10 @@ pub fn a_steady_upload_outlasts_the_timeout_test() {
   let assert Ok(srv) = builder(200) |> server.start
   let assert Ok(socket) = connect(server.port_of(srv))
   let piece = string.repeat("u", 70_000)
-  send(socket, "POST /upload HTTP/1.1\r\ncontent-length: 280000\r\n\r\n")
+  send(
+    socket,
+    "POST /upload HTTP/1.1\r\nhost: localhost\r\ncontent-length: 280000\r\n\r\n",
+  )
   // Four pieces, 150 ms apart: 600 ms in all, against a 200 ms timeout.
   list.each([1, 2, 3, 4], fn(_) {
     send(socket, piece)

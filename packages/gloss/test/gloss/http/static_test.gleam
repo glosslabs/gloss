@@ -228,23 +228,29 @@ pub fn sendfile_over_a_socket_test() {
   let assert Ok(srv) =
     builder(static.new(dir)) |> server.port(0) |> server.start
   let assert Ok(socket) = connect(server.port_of(srv))
-  send(socket, "GET /assets/js/app.js HTTP/1.1\r\n\r\n")
+  send(socket, "GET /assets/js/app.js HTTP/1.1\r\nhost: localhost\r\n\r\n")
   let assert Ok(#(status, _, body)) = read_response(socket, 1000)
   status |> should.equal(200)
   body |> should.equal(<<"let x = 1">>)
   // The connection stays usable after a sendfile.
-  send(socket, "GET /assets/app.css HTTP/1.1\r\n\r\n")
+  send(socket, "GET /assets/app.css HTTP/1.1\r\nhost: localhost\r\n\r\n")
   let assert Ok(#(_, _, body)) = read_response(socket, 1000)
   body |> should.equal(<<"body{}">>)
   // Several ranges arrive as one multipart body, file parts via sendfile.
-  send(socket, "GET /assets/js/app.js HTTP/1.1\r\nrange: bytes=0-2,8-8\r\n\r\n")
+  send(
+    socket,
+    "GET /assets/js/app.js HTTP/1.1\r\nhost: localhost\r\nrange: bytes=0-2,8-8\r\n\r\n",
+  )
   let assert Ok(#(206, headers, body)) = read_response(socket, 1000)
   let assert Ok("multipart/byteranges; boundary=" <> boundary) =
     list.key_find(headers, "content-type")
   string.contains(bit_array_to_string(body), "\r\n\r\nlet\r\n--" <> boundary)
   |> should.be_true
   // A range is sent from the right offset.
-  send(socket, "GET /assets/js/app.js HTTP/1.1\r\nrange: bytes=4-\r\n\r\n")
+  send(
+    socket,
+    "GET /assets/js/app.js HTTP/1.1\r\nhost: localhost\r\nrange: bytes=4-\r\n\r\n",
+  )
   let assert Ok(#(status, _, body)) = read_response(socket, 1000)
   status |> should.equal(206)
   body |> should.equal(<<"x = 1">>)

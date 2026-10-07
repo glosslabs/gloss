@@ -147,7 +147,7 @@ fn start() -> #(Server, Int) {
 fn upload(path: String, payload: String) -> String {
   "POST "
   <> path
-  <> " HTTP/1.1\r\ncontent-type: multipart/form-data; boundary=B\r\ncontent-length: "
+  <> " HTTP/1.1\r\nhost: localhost\r\ncontent-type: multipart/form-data; boundary=B\r\ncontent-length: "
   <> int.to_string(string.byte_size(payload))
   <> "\r\n\r\n"
   <> payload

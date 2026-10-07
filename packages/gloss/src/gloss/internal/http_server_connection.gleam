@@ -55,6 +55,12 @@ pub type Problem {
   Malformed(detail: String)
   HeaderTimeout
   TooManyHeaders
+  /// The request line is longer than the server reads.
+  UriTooLong
+  /// A header line is longer than the server reads.
+  HeaderTooLarge
+  /// An `Expect` header the server can't meet.
+  UnknownExpectation(value: String)
   UnsupportedTransferEncoding
   /// The handler ran past the request timeout and was stopped.
   RequestTimeout
@@ -77,6 +83,7 @@ fn await_request(socket: Socket, settings: Settings) -> Nil {
     }
     tcp.BadRequest(line:) ->
       reject(socket, settings, Error(Nil), 400, Malformed(line))
+    tcp.LineTooLong -> reject(socket, settings, Error(Nil), 414, UriTooLong)
     tcp.Header(..) | tcp.EndOfHeaders ->
       reject(
         socket,
@@ -113,6 +120,8 @@ fn read_headers(
     tcp.Timeout -> reject(socket, settings, accept(head), 408, HeaderTimeout)
     tcp.BadRequest(line:) ->
       reject(socket, settings, accept(head), 400, Malformed(line))
+    tcp.LineTooLong ->
+      reject(socket, settings, accept(head), 431, HeaderTooLarge)
     tcp.RequestLine(..) ->
       reject(
         socket,
@@ -134,14 +143,19 @@ fn read_body(
   let reject = fn(status, problem) {
     reject(socket, settings, accept(head), status, problem)
   }
-  case http1.body_framing(head) {
-    Error(http1.UnsupportedTransferEncoding) ->
+  case http1.check(head), http1.body_framing(head) {
+    Error(http1.MissingHost), _ -> reject(400, Malformed("missing host header"))
+    Error(http1.MultipleHosts), _ ->
+      reject(400, Malformed("more than one host header"))
+    Error(http1.UnknownExpectation(value)), _ ->
+      reject(417, UnknownExpectation(value))
+    Ok(Nil), Error(http1.UnsupportedTransferEncoding) ->
       reject(501, UnsupportedTransferEncoding)
-    Error(http1.InvalidContentLength) ->
+    Ok(Nil), Error(http1.InvalidContentLength) ->
       reject(400, Malformed("invalid content-length"))
-    Error(http1.ConflictingFraming) ->
+    Ok(Nil), Error(http1.ConflictingFraming) ->
       reject(400, Malformed("both transfer-encoding and content-length"))
-    Ok(framing) -> {
+    Ok(Nil), Ok(framing) -> {
       request_body.reset()
       let body = network_body(socket, settings, head, framing)
       respond(socket, settings, head, body, framing, draining)
@@ -666,6 +680,9 @@ pub fn message(problem: Problem) -> String {
     Malformed(_) -> "malformed request"
     HeaderTimeout -> "request timeout"
     TooManyHeaders -> "too many headers"
+    UriTooLong -> "uri too long"
+    HeaderTooLarge -> "header too large"
+    UnknownExpectation(_) -> "expectation not supported"
     UnsupportedTransferEncoding -> "transfer-encoding is not supported"
     RequestTimeout -> "request timed out"
     HandlerCrashed(_) -> "internal server error"

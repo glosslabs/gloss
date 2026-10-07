@@ -71,7 +71,7 @@ fn start() -> #(Server, Int) {
 fn post(path: String, body: String) -> String {
   "POST "
   <> path
-  <> " HTTP/1.1\r\ncontent-length: "
+  <> " HTTP/1.1\r\nhost: localhost\r\ncontent-length: "
   <> int.to_string(string.byte_size(body))
   <> "\r\n\r\n"
   <> body
@@ -98,7 +98,7 @@ pub fn chunked_uploads_stream_test() {
   let chunks = list.repeat("7d0\r\n" <> chunk <> "\r\n", 3) |> string.concat
   send(
     socket,
-    "POST /upload HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n"
+    "POST /upload HTTP/1.1\r\nhost: localhost\r\ntransfer-encoding: chunked\r\n\r\n"
       <> chunks
       <> "0\r\n\r\n",
   )
@@ -131,7 +131,7 @@ pub fn rejecting_without_reading_skips_100_continue_test() {
   let assert Ok(socket) = connect(port)
   send(
     socket,
-    "POST /private HTTP/1.1\r\ncontent-length: 5\r\nexpect: 100-continue\r\n\r\n",
+    "POST /private HTTP/1.1\r\nhost: localhost\r\ncontent-length: 5\r\nexpect: 100-continue\r\n\r\n",
   )
   // The final answer comes first, with no 100 Continue before it.
   let assert Ok(#(401, headers, _)) = read_response(socket, 1000)
@@ -161,7 +161,7 @@ fn post_gzip(path: String, encoding: String, payload: BitArray) -> BitArray {
   <<
     "POST ":utf8,
     path:utf8,
-    " HTTP/1.1\r\ncontent-encoding: ":utf8,
+    " HTTP/1.1\r\nhost: localhost\r\ncontent-encoding: ":utf8,
     encoding:utf8,
     "\r\ncontent-length: ":utf8,
     int.to_string(bit_array.byte_size(payload)):utf8,
