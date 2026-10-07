@@ -1,9 +1,11 @@
 //// The process that owns a running server: the listen socket, the acceptor
 //// pool, and a monitor on every open connection.
 ////
-//// Shutting down closes the listen socket, so new connections are refused,
-//// asks every connection to drain, and waits for them to finish up to a
-//// deadline. Connections still running at the deadline are killed.
+//// Shutting down first calls `on_drain` and, if there is a drain delay,
+//// keeps serving until it passes. Then it closes the listen socket, so new
+//// connections are refused, asks every connection to drain, and waits for
+//// them to finish up to a deadline. Connections still running at the
+//// deadline are killed.
 ////
 //// The process traps exits, so a supervisor stopping it, or any linked
 //// process exiting, drains the same way before it exits.
@@ -34,6 +36,11 @@ pub type Config {
     max_connections: Option(Int),
     /// Called each time the cap is reached.
     on_saturated: fn(Int) -> Nil,
+    /// Called as soon as shutdown begins, before the drain delay.
+    on_drain: fn() -> Nil,
+    /// Milliseconds to keep accepting and serving after shutdown begins,
+    /// before the listen socket closes.
+    drain_delay: Int,
   )
 }
 
@@ -53,6 +60,8 @@ pub opaque type Message {
   Released
   ConnectionDown(Pid)
   Shutdown(reply: Subject(Result(Nil, Int)))
+  /// The drain delay is over: stop accepting and drain connections.
+  CloseListener
   DrainDeadline
   Exited(pid: Pid, reason: process.ExitReason)
   Ignore
@@ -69,6 +78,11 @@ type State {
     acceptors: Set(Pid),
     connections: Dict(Pid, Monitor),
     shutdown_timeout: Int,
+    on_drain: fn() -> Nil,
+    drain_delay: Int,
+    /// Shutdown has begun but the drain delay hasn't passed.
+    closing: Option(Drain),
+    /// The listen socket is closed and connections are draining.
     draining: Option(Drain),
     max_connections: Option(Int),
     on_saturated: fn(Int) -> Nil,
@@ -119,6 +133,9 @@ pub fn start(
           acceptors:,
           connections: dict.new(),
           shutdown_timeout: config.shutdown_timeout,
+          on_drain: config.on_drain,
+          drain_delay: config.drain_delay,
+          closing: None,
           draining: None,
           max_connections: config.max_connections,
           on_saturated: config.on_saturated,
@@ -137,6 +154,7 @@ pub fn start(
 }
 
 /// Drain and stop. `Error(n)` when `n` connections had to be killed.
+/// `timeout` covers the drain delay and the drain.
 pub fn shutdown(handle: Handle, timeout: Int) -> Result(Nil, Int) {
   process.call(handle.subject, timeout + 5000, Shutdown)
 }
@@ -223,6 +241,12 @@ fn on_message(state: State, message: Message) -> actor.Next(State, Message) {
     Shutdown(reply:) ->
       begin_drain(state, Drain(reply: Some(reply), exit: None))
 
+    CloseListener ->
+      case state.closing {
+        Some(drain) -> close_and_drain(State(..state, closing: None), drain)
+        None -> actor.continue(state)
+      }
+
     Exited(pid:, reason:) ->
       case set.contains(state.acceptors, pid), reason {
         // Acceptors exit normally once the listen socket closes.
@@ -262,19 +286,31 @@ fn release_waiting(state: State) -> State {
 }
 
 fn begin_drain(state: State, drain: Drain) -> actor.Next(State, Message) {
-  case state.draining {
-    // Already draining: the first request decides how we stop.
-    Some(_) -> actor.continue(state)
-    None -> {
-      tcp.close_listener(state.listener)
-      // Held acceptors find the listener closed and exit.
-      list.each(state.waiting, process.send(_, Nil))
-      let state = State(..state, waiting: [])
-      dict.keys(state.connections) |> list.each(tcp.request_drain)
-      process.send_after(state.self, state.shutdown_timeout, DrainDeadline)
-      State(..state, draining: Some(drain)) |> finish_if_drained
+  case state.closing, state.draining {
+    // Already shutting down: the first request decides how we stop.
+    Some(_), _ | _, Some(_) -> actor.continue(state)
+    None, None -> {
+      state.on_drain()
+      case state.drain_delay {
+        0 -> close_and_drain(state, drain)
+        delay -> {
+          // Keep serving while load balancers notice the server is going.
+          process.send_after(state.self, delay, CloseListener)
+          actor.continue(State(..state, closing: Some(drain)))
+        }
+      }
     }
   }
+}
+
+fn close_and_drain(state: State, drain: Drain) -> actor.Next(State, Message) {
+  tcp.close_listener(state.listener)
+  // Held acceptors find the listener closed and exit.
+  list.each(state.waiting, process.send(_, Nil))
+  let state = State(..state, waiting: [])
+  dict.keys(state.connections) |> list.each(tcp.request_drain)
+  process.send_after(state.self, state.shutdown_timeout, DrainDeadline)
+  State(..state, draining: Some(drain)) |> finish_if_drained
 }
 
 fn finish_if_drained(state: State) -> actor.Next(State, Message) {

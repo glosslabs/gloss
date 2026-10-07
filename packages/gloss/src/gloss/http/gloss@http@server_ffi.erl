@@ -9,7 +9,8 @@
          upload_open/1, upload_write/2, upload_close/1, upload_rename/2,
          upload_delete/1,
          next/2, read_body/3, drain_requested/0, request_drain/1, await_go/0,
-         go/1, rescue/1, http_date/0]).
+         go/1, rescue/1, http_date/0,
+         new_flag/0, raise_flag/1, flag_raised/1]).
 
 %% --- Sockets ----------------------------------------------------------------
 
@@ -216,6 +217,18 @@ await_go() ->
 go(Pid) ->
     Pid ! gloss_http_go,
     nil.
+
+%% A flag any process can raise or read without messages, e.g. whether the
+%% server is draining.
+new_flag() ->
+    atomics:new(1, []).
+
+raise_flag(Flag) ->
+    atomics:put(Flag, 1, 1),
+    nil.
+
+flag_raised(Flag) ->
+    atomics:get(Flag, 1) =:= 1.
 
 %% --- Handlers ---------------------------------------------------------------
 

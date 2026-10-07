@@ -2,6 +2,7 @@ import gleam/bytes_tree
 import gleam/erlang/process
 import gleam/int
 import gleam/list
+import gleam/option.{Some}
 import gleam/otp/static_supervisor
 import gleam/string
 import gleam/time/duration
@@ -465,4 +466,66 @@ pub fn pipelined_requests_are_answered_in_order_test() {
   third.0 |> should.equal(404)
   close(socket)
   let _ = server.shutdown(srv)
+}
+
+pub fn probes_are_answered_before_routing_test() {
+  let events = process.new_subject()
+  let builder =
+    builder()
+    |> server.liveness(Some("/health"))
+    |> server.readiness(Some("/ready"))
+    |> server.with(fn(_) { fn(_, _) { reply.forbidden() } })
+    |> server.tracer(tracer.new() |> tracer.handle(process.send(events, _)))
+  let #(srv, port) = start(builder)
+  let assert Ok(socket) = connect(port)
+  send(socket, get("/health"))
+  let assert Ok(live) = read_response(socket, 1000)
+  live.0 |> should.equal(200)
+  live.2 |> should.equal(<<"ok">>)
+  send(socket, get("/ready"))
+  let assert Ok(ready) = read_response(socket, 1000)
+  ready.0 |> should.equal(200)
+  ready.2 |> should.equal(<<"ready">>)
+  // Other paths still go through the middleware.
+  send(socket, get("/hello"))
+  let assert Ok(other) = read_response(socket, 1000)
+  other.0 |> should.equal(403)
+  close(socket)
+  let _ = server.shutdown(srv)
+  // Only the routed request is traced.
+  drain(events)
+  |> list.filter(fn(event) {
+    case event {
+      tracer.Span(..) -> True
+      _ -> False
+    }
+  })
+  |> list.length
+  |> should.equal(1)
+}
+
+pub fn readiness_fails_during_the_drain_delay_test() {
+  let builder =
+    builder()
+    |> server.readiness(Some("/ready"))
+    |> server.drain_delay(duration.milliseconds(300))
+  let #(srv, port) = start(builder)
+  let done = process.new_subject()
+  process.spawn(fn() { process.send(done, server.shutdown(srv)) })
+  process.sleep(50)
+
+  // Still accepting and serving, but no longer ready.
+  let assert Ok(socket) = connect(port)
+  send(socket, get("/ready"))
+  let assert Ok(ready) = read_response(socket, 1000)
+  ready.0 |> should.equal(503)
+  ready.2 |> should.equal(<<"draining">>)
+  send(socket, get("/hello"))
+  let assert Ok(hello) = read_response(socket, 1000)
+  hello.0 |> should.equal(200)
+
+  // Once the delay passes, the server drains and stops.
+  process.receive(done, 1000) |> should.equal(Ok(Ok(Nil)))
+  is_closed(socket, 1000) |> should.be_true
+  connect(port) |> should.equal(Error(Nil))
 }

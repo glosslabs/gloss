@@ -41,6 +41,22 @@
 //// header prefers: JSON, problem+json, HTML (see `error_page`) or plain
 //// text, defaulting to JSON. See `gloss/http/reply`.
 ////
+//// ## Health checks
+////
+//// Behind a load balancer, give the server a readiness path and a drain
+//// delay:
+////
+//// ```gleam
+//// server.new(routes(), state)
+//// |> server.liveness(Some("/health"))
+//// |> server.readiness(Some("/ready"))
+//// |> server.drain_delay(duration.seconds(5))
+//// ```
+////
+//// On `shutdown`, `/ready` starts answering `503` while the server keeps
+//// serving for the delay, so the balancer takes it out of rotation before
+//// connections are refused.
+////
 //// ## Limits
 ////
 //// Request bodies may be sent with `Content-Length` or chunked; other
@@ -95,6 +111,9 @@ pub opaque type Builder(state) {
     idle_timeout: Duration,
     request_timeout: Option(Duration),
     shutdown_timeout: Duration,
+    drain_delay: Duration,
+    liveness: Option(String),
+    readiness: Option(String),
     acceptors: Int,
     max_connections: Option(Int),
     trusted_proxies: List(forwarded.Cidr),
@@ -160,6 +179,9 @@ pub fn new(router: Router(state), state: state) -> Builder(state) {
     idle_timeout: duration.seconds(60),
     request_timeout: Some(duration.seconds(30)),
     shutdown_timeout: duration.seconds(10),
+    drain_delay: duration.seconds(0),
+    liveness: None,
+    readiness: None,
     acceptors: 10,
     max_connections: Some(10_000),
     trusted_proxies: [],
@@ -251,6 +273,38 @@ pub fn shutdown_timeout(
   timeout: Duration,
 ) -> Builder(state) {
   Builder(..builder, shutdown_timeout: timeout)
+}
+
+/// How long `shutdown` keeps serving before it stops accepting
+/// connections. The readiness probe (see `readiness`) fails as soon as
+/// shutdown begins, so a load balancer that polls it every few seconds
+/// can stop sending traffic before connections are refused. Set it a
+/// little longer than the balancer's polling interval. The shutdown
+/// timeout starts once the delay is over. Default zero.
+pub fn drain_delay(builder: Builder(state), delay: Duration) -> Builder(state) {
+  Builder(..builder, drain_delay: delay)
+}
+
+/// A path the server answers `200 ok` on for as long as it's running, for
+/// a liveness probe, e.g. `Some("/health")`. It answers `GET` and `HEAD`
+/// before routing, so no middleware runs, nothing is traced, and no route
+/// is needed. Default `None`.
+pub fn liveness(
+  builder: Builder(state),
+  path: Option(String),
+) -> Builder(state) {
+  Builder(..builder, liveness: path)
+}
+
+/// A path the server answers `200 ready` on until shutdown begins, then
+/// `503 draining`, for a load balancer's readiness probe, e.g.
+/// `Some("/ready")`. Like `liveness`, it is answered before routing and
+/// not traced. Pair it with `drain_delay`. Default `None`.
+pub fn readiness(
+  builder: Builder(state),
+  path: Option(String),
+) -> Builder(state) {
+  Builder(..builder, readiness: path)
 }
 
 /// Believe forwarding headers (`Forwarded`, `X-Forwarded-For`,
@@ -355,7 +409,9 @@ pub fn supervised(builder: Builder(state)) -> ChildSpecification(Server) {
         Error(actor.InitFailed("invalid routes: " <> string.inspect(errors)))
     }
   })
-  |> supervision.timeout(ms(builder.shutdown_timeout) + 1000)
+  |> supervision.timeout(
+    ms(builder.drain_delay) + ms(builder.shutdown_timeout) + 1000,
+  )
   |> supervision.restart(supervision.Transient)
 }
 
@@ -367,6 +423,8 @@ pub fn port_of(server: Server) -> Int {
 /// Stop accepting connections, let in-flight requests finish, then stop.
 /// Idle keep-alive connections are closed at once. Connections still busy
 /// when the shutdown timeout passes are closed and counted in `TimedOut`.
+/// With a `drain_delay`, the readiness probe fails at once and the server
+/// keeps serving until the delay passes, then drains.
 pub fn shutdown(server: Server) -> Result(Nil, ShutdownError) {
   let result = control.shutdown(server.handle, server.shutdown_timeout)
   let killed = case result {
@@ -391,7 +449,8 @@ fn start_control(
   builder: Builder(state),
   table: router.Table(state),
 ) -> Result(actor.Started(Server), actor.StartError) {
-  let pipeline = pipeline(builder, table)
+  let draining = new_flag()
+  let pipeline = pipeline(builder, table, draining)
   let settings =
     connection.Settings(
       handler: pipeline,
@@ -432,6 +491,8 @@ fn start_control(
           meta: fn() { [#("max_connections", meta.Int(max))] },
         )
       },
+      on_drain: fn() { raise_flag(draining) },
+      drain_delay: ms(builder.drain_delay),
     )
   use started <- result.map(control.start(config))
   let port = started.data.port
@@ -453,7 +514,7 @@ fn start_control(
     pid: started.pid,
     data: Server(
       handle: started.data,
-      shutdown_timeout: ms(builder.shutdown_timeout),
+      shutdown_timeout: ms(builder.drain_delay) + ms(builder.shutdown_timeout),
       tracer: builder.tracer,
       on_stopped: builder.on_stopped,
     ),
@@ -505,7 +566,7 @@ pub fn handle(
 ) -> Response(BytesTree) {
   case router.table(builder.router) {
     Ok(table) -> {
-      let response = pipeline(builder, table)(request, "127.0.0.1")
+      let response = pipeline(builder, table, new_flag())(request, "127.0.0.1")
       response.set_body(response, materialise(response.body))
     }
     Error(errors) -> panic as { "invalid routes: " <> string.inspect(errors) }
@@ -549,6 +610,45 @@ fn collect(chunks: process.Subject(BytesTree), tree: BytesTree) -> BytesTree {
 fn read_range(path: String, offset: Int, length: Int) -> Result(BitArray, Nil)
 
 fn pipeline(
+  builder: Builder(state),
+  table: router.Table(state),
+  draining: Flag,
+) -> fn(Request, String) -> Response(Wire) {
+  let Builder(liveness:, readiness:, error_page:, ..) = builder
+  let respond = respond(builder, table)
+  fn(request: Request, peer: String) {
+    case probe(request, liveness, readiness, draining) {
+      Ok(response) -> reply_render.render(response, Error(Nil), error_page)
+      Error(Nil) -> respond(request, peer)
+    }
+  }
+}
+
+/// The answer to a liveness or readiness probe, if the request is one.
+fn probe(
+  request: Request,
+  liveness: Option(String),
+  readiness: Option(String),
+  draining: Flag,
+) -> Result(reply.Response, Nil) {
+  let probed = fn(path) { path == Some(request.path) }
+  case request.method {
+    http.Get | http.Head ->
+      case probed(liveness), probed(readiness) {
+        True, _ -> Ok(reply.text(200, "ok"))
+        _, True ->
+          case flag_raised(draining) {
+            False -> Ok(reply.text(200, "ready"))
+            True -> Ok(reply.text(503, "draining"))
+          }
+        False, False -> Error(Nil)
+      }
+    _ -> Error(Nil)
+  }
+}
+
+/// Route the request and run its handler with the middleware, tracing it.
+fn respond(
   builder: Builder(state),
   table: router.Table(state),
 ) -> fn(Request, String) -> Response(Wire) {
@@ -728,3 +828,15 @@ fn monotonic_time(unit: Atom) -> Int
 
 @external(erlang, "gloss@http@server_ffi", "rescue")
 fn rescue(work: fn() -> a) -> Result(a, String)
+
+/// Raised when shutdown begins.
+type Flag
+
+@external(erlang, "gloss@http@server_ffi", "new_flag")
+fn new_flag() -> Flag
+
+@external(erlang, "gloss@http@server_ffi", "raise_flag")
+fn raise_flag(flag: Flag) -> Nil
+
+@external(erlang, "gloss@http@server_ffi", "flag_raised")
+fn flag_raised(flag: Flag) -> Bool
