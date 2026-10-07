@@ -7,7 +7,7 @@ import gloss/http/server.{
   type Builder, type Server, type ShutdownError, type StartError,
 }
 import gloss/http/session
-import gloss/http/session/memory
+import gloss/http/session/file
 import gloss/http/static
 import gloss/logger.{type Logger}
 import gloss/tracer.{type Tracer}
@@ -26,7 +26,8 @@ pub fn builder(
     Error(Nil) -> "priv/static"
   }
 
-  let assert Ok(store) = memory.start()
+  // Kept on disk, so logins survive a restart.
+  let assert Ok(store) = file.start(config.data_dir <> "/sessions.dets")
   let sessions =
     session.new(store)
     |> session.cookie_name("forum_session")

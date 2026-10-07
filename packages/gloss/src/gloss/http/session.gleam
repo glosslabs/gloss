@@ -24,6 +24,10 @@
 ////
 //// Call `regenerate` when the user's privileges change, such as at login,
 //// so an id known before login can't be used after it.
+////
+//// Two stores come with gloss: `session/memory` keeps sessions in memory
+//// until the node stops, and `session/file` also writes them to a file so
+//// they survive restarts.
 
 import gleam/bit_array
 import gleam/crypto
