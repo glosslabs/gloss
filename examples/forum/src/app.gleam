@@ -12,8 +12,8 @@ import gloss/store
 import gloss/tracer
 import server
 import server/state
-import store/thread_store
-import store/user_store
+import store/threads
+import store/users
 
 pub fn main() -> Nil {
   let config = config.from_env()
@@ -26,8 +26,8 @@ pub fn main() -> Nil {
     |> tracing.with_sentry(sentry)
 
   let assert Ok(db) = db.start(config.database_url, tracer)
-  let assert Ok(users) = user_store.new(db) |> store.start
-  let assert Ok(threads) = thread_store.new(db) |> store.start
+  let assert Ok(users) = users.new(db) |> store.start
+  let assert Ok(threads) = threads.new(db) |> store.start
 
   let state =
     state.new(

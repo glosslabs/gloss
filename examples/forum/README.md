@@ -48,7 +48,7 @@ outside services (logging, Sentry, the database) and composes everything.
 | `server/handlers/*` | One module per area: accounts, threads, profile, users |
 | `server/middleware/current_user` | The signed-in user from the session |
 | `server/views/*` | Lustre views rendered to HTML |
-| `store/user_store`, `store/thread_store` | The stores, answered from Postgres |
+| `store/users`, `store/threads` | The stores, answered from Postgres |
 
 ### Domains and stores
 
@@ -59,8 +59,8 @@ Each aggregate has a store port in its domain: a message type, such as
 `user_store.Message` (`Insert`, `Get`, `FindByEmail`, `Save`, ...), that a
 store process answers, built on `gloss/store`. The domain services keep the
 rules (validating input, hashing passwords, deciding timestamps) and send
-messages for storage. `store/user_store` and `store/thread_store` answer
-them with SQL from a `store.concurrent` store, each message in a process of its
+messages for storage. `store/users` and `store/threads` answer them
+with SQL from a `store.concurrent` store, each message in a process of its
 own so statements run in parallel on the pool. The tests answer the same
 messages from memory with `store.serial` (`test/support/memory_*`), and
 `test/support/store_contract` checks that both behave the same.

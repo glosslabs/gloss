@@ -8,8 +8,8 @@ import gleam/time/timestamp
 import gloss/sql
 import gloss/store
 import gloss/tracer
-import store/thread_store as postgres_threads
-import store/user_store as postgres_users
+import store/threads as postgres_threads
+import store/users as postgres_users
 import support/memory_threads
 import support/memory_users
 import support/store_contract as contract
