@@ -3,31 +3,28 @@ import app/notes
 import app/routes/api
 import app/server as app_server
 import app/state
-import gleam/bit_array
-import gleam/bytes_tree.{type BytesTree}
-import gleam/http
-import gleam/http/request
-import gleam/http/response.{type Response}
+import gleam/json
 import gleam/option.{None}
 import gleeunit
 import gleeunit/should
-import gloss/http/body
 import gloss/http/reply.{type Request}
 import gloss/http/router
 import gloss/http/server
 import gloss/logger
+import gloss/testing/request
+import gloss/testing/response
 import gloss/tracer
 
 pub fn main() {
   gleeunit.main()
 }
 
-fn call(req: Request) -> Response(BytesTree) {
+fn call(req: Request) -> response.Response {
   session()(req)
 }
 
 /// Run several requests against one application.
-fn session() -> fn(Request) -> Response(BytesTree) {
+fn session() -> fn(Request) -> response.Response {
   let config =
     Config(
       port: 0,
@@ -48,27 +45,8 @@ fn session() -> fn(Request) -> Response(BytesTree) {
   server.handle(builder, _)
 }
 
-fn req(method: http.Method, path: String) -> Request {
-  request.new()
-  |> request.set_method(method)
-  |> request.set_path(path)
-  |> request.set_body(body.from_bits(<<>>))
-}
-
 fn authed(r: Request) -> Request {
-  request.set_header(r, "authorization", "Bearer t")
-}
-
-fn json_body(r: Request, payload: String) -> Request {
-  r
-  |> request.set_header("content-type", "application/json")
-  |> request.set_body(body.from_string(payload))
-}
-
-fn text_of(res: Response(BytesTree)) -> String {
-  let assert Ok(text) =
-    res.body |> bytes_tree.to_bit_array |> bit_array.to_string
-  text
+  request.header(r, "authorization", "Bearer t")
 }
 
 pub fn routes_are_valid_test() {
@@ -76,20 +54,18 @@ pub fn routes_are_valid_test() {
 }
 
 pub fn health_test() {
-  let res = call(req(http.Get, "/health"))
+  let res = call(request.get("/health"))
   res.status |> should.equal(200)
-  text_of(res) |> should.equal("{\"status\":\"ok\"}")
+  response.text(res) |> should.equal("{\"status\":\"ok\"}")
 }
 
 pub fn me_requires_a_token_test() {
-  call(req(http.Get, "/auth/me")).status |> should.equal(401)
-  call(
-    req(http.Get, "/auth/me") |> request.set_header("authorization", "Bearer x"),
-  ).status
+  call(request.get("/auth/me")).status |> should.equal(401)
+  call(request.get("/auth/me") |> request.header("authorization", "Bearer x")).status
   |> should.equal(401)
-  let res = call(req(http.Get, "/auth/me") |> authed)
+  let res = call(request.get("/auth/me") |> authed)
   res.status |> should.equal(200)
-  text_of(res) |> should.equal("{\"name\":\"api\"}")
+  response.text(res) |> should.equal("{\"name\":\"api\"}")
 }
 
 pub fn notes_lifecycle_test() {
@@ -97,29 +73,35 @@ pub fn notes_lifecycle_test() {
 
   let created =
     send(
-      req(http.Post, "/notes") |> authed |> json_body("{\"title\":\"milk\"}"),
+      request.post("/notes")
+      |> authed
+      |> request.json(json.object([#("title", json.string("milk"))])),
     )
   created.status |> should.equal(201)
-  text_of(created)
+  response.text(created)
   |> should.equal("{\"id\":1,\"title\":\"milk\",\"body\":\"\"}")
 
-  let shown = send(req(http.Get, "/notes/1") |> authed)
+  let shown = send(request.get("/notes/1") |> authed)
   shown.status |> should.equal(200)
 
-  let listed = send(req(http.Get, "/notes") |> authed)
-  text_of(listed)
+  let listed = send(request.get("/notes") |> authed)
+  response.text(listed)
   |> should.equal("{\"notes\":[{\"id\":1,\"title\":\"milk\",\"body\":\"\"}]}")
 
-  send(req(http.Delete, "/notes/1") |> authed).status |> should.equal(204)
-  send(req(http.Get, "/notes/1") |> authed).status |> should.equal(404)
+  send(request.delete("/notes/1") |> authed).status |> should.equal(204)
+  send(request.get("/notes/1") |> authed).status |> should.equal(404)
 }
 
 pub fn notes_require_a_token_test() {
-  call(req(http.Get, "/notes")).status |> should.equal(401)
+  call(request.get("/notes")).status |> should.equal(401)
 }
 
 pub fn invalid_note_test() {
   let res =
-    call(req(http.Post, "/notes") |> authed |> json_body("{\"title\":3}"))
+    call(
+      request.post("/notes")
+      |> authed
+      |> request.json(json.object([#("title", json.int(3))])),
+    )
   res.status |> should.equal(422)
 }

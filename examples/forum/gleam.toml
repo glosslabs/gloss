@@ -20,3 +20,4 @@ lustre = ">= 5.7.1 and < 6.0.0"
 
 [dev_dependencies]
 gleeunit = ">= 1.11.0 and < 2.0.0"
+gloss_test = { path = "../../packages/gloss_test" }

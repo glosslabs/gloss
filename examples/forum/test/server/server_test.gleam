@@ -1,33 +1,29 @@
-//// The server, through server.handle: requests carry the session cookie
-//// a previous response set, like a browser.
+//// The server, through server.handle, driven by gloss_test browsers that
+//// keep their own session cookies. Each person in a test gets a browser;
+//// they share one application.
 
 import app/config.{Config}
 import domain/accounts
 import domain/forum
-import gleam/bit_array
-import gleam/bytes_tree
-import gleam/http
-import gleam/http/request
-import gleam/http/response.{type Response}
 import gleam/int
 import gleam/list
 import gleam/string
-import gleeunit/should
-import gloss/http/body
-import gloss/http/reply
+import gloss/http/reply.{type Request}
 import gloss/http/server as gloss_server
 import gloss/logger
+import gloss/testing/browser.{type Browser}
+import gloss/testing/html
+import gloss/testing/request
+import gloss/testing/response
 import gloss/tracer
 import server
 import server/state
 import support/memory_threads
 import support/memory_users
 
-type Browser {
-  Browser(send: fn(reply.Request) -> Response(bytes_tree.BytesTree))
-}
-
-fn browser() -> #(Browser, String) {
+/// A fresh application with in-memory stores, as a function a browser can
+/// send requests to.
+fn app() -> fn(Request) -> response.Response {
   let data_dir =
     "build/test-data/"
     <> int.to_string(system_time())
@@ -48,205 +44,141 @@ fn browser() -> #(Browser, String) {
       logger: logger.discard(),
       tracer: tracer.new(),
     )
-  #(Browser(send: fn(req) { gloss_server.handle(builder, req) }), data_dir)
+  gloss_server.handle(builder, _)
 }
 
-fn get(path: String, cookie: String) {
-  request.new()
-  |> request.set_method(http.Get)
-  |> request.set_scheme(http.Http)
-  |> request.set_path(path)
-  |> request.set_header("cookie", "forum_session=" <> cookie)
-  |> request.set_header("accept", "text/html")
-  |> request.set_body(body.from_bits(<<>>))
+/// The visible text of the page at `path`.
+fn page(b: Browser, path: String) -> String {
+  browser.get(b, path) |> response.text |> html.text
 }
 
-fn post_form(path: String, cookie: String, fields: List(#(String, String))) {
-  get(path, cookie)
-  |> request.set_method(http.Post)
-  |> request.set_header("content-type", "application/x-www-form-urlencoded")
-  |> request.set_body(body.from_string(uri_encode(fields)))
-}
-
-fn uri_encode(fields: List(#(String, String))) -> String {
-  fields
-  |> list.map(fn(field) { field.0 <> "=" <> string.replace(field.1, " ", "+") })
-  |> string.join("&")
-}
-
-fn session_cookie(res: Response(a)) -> String {
-  res.headers
-  |> list.find_map(fn(header) {
-    case header {
-      #("set-cookie", "forum_session=" <> rest) ->
-        case string.split_once(rest, ";") {
-          Ok(#(value, _)) -> Ok(value)
-          Error(Nil) -> Ok(rest)
-        }
-      _ -> Error(Nil)
-    }
-  })
-  |> unwrap("")
-}
-
-fn unwrap(result: Result(a, b), default: a) -> a {
-  case result {
-    Ok(value) -> value
-    Error(_) -> default
-  }
-}
-
-fn text(res: Response(bytes_tree.BytesTree)) -> String {
-  let assert Ok(text) = bit_array.to_string(bytes_tree.to_bit_array(res.body))
-  text
-}
-
-fn location(res: Response(a)) -> String {
-  response.get_header(res, "location") |> unwrap("")
-}
-
-/// Register a user and return their session cookie.
-fn register(browser: Browser, email: String) -> String {
+/// Register an account in `b`, which is then signed in.
+fn register(b: Browser, email: String) -> Nil {
   let res =
-    browser.send(
-      post_form("/register", "", [
-        #("email", email),
-        #("password", "correct horse"),
-      ]),
-    )
-  res.status |> should.equal(303)
-  session_cookie(res)
+    browser.submit(b, "/register", [
+      #("email", email),
+      #("password", "correct horse"),
+    ])
+  assert res.status == 303
+  assert browser.cookie(b, "forum_session") |> result_is_ok
 }
 
 pub fn registration_test() {
-  let #(browser, _) = browser()
-  let cookie = register(browser, "ada@example.com")
-  { cookie != "" } |> should.be_true
-  browser.send(get("/", cookie))
-  |> text
-  |> string.contains("Sign out")
-  |> should.be_true
+  let ada = browser.new(app())
+  register(ada, "ada@example.com")
+  assert string.contains(page(ada, "/"), "Sign out")
 
-  let res =
-    browser.send(
-      post_form("/register", "", [
-        #("email", "ada@example.com"),
-        #("password", "correct horse"),
-      ]),
-    )
-  res.status |> should.equal(422)
-  text(res) |> string.contains("already registered") |> should.be_true
+  let app = app()
+  register(browser.new(app), "ada@example.com")
+  let taken =
+    browser.submit(browser.new(app), "/register", [
+      #("email", "ada@example.com"),
+      #("password", "correct horse"),
+    ])
+  assert taken.status == 422
+  assert string.contains(html.text(response.text(taken)), "already registered")
 }
 
 pub fn login_and_logout_test() {
-  let #(browser, _) = browser()
-  let _ = register(browser, "ada@example.com")
+  let app = app()
+  register(browser.new(app), "ada@example.com")
+  let ada = browser.new(app)
+
   let wrong =
-    browser.send(
-      post_form("/login", "", [
-        #("email", "ada@example.com"),
-        #("password", "nope nope"),
-      ]),
-    )
-  wrong.status |> should.equal(422)
+    browser.submit(ada, "/login", [
+      #("email", "ada@example.com"),
+      #("password", "nope nope"),
+    ])
+  assert wrong.status == 422
 
   let res =
+    browser.submit(ada, "/login", [
+      #("email", "ada@example.com"),
+      #("password", "correct horse"),
+    ])
+  assert res.status == 303
+  let assert Ok(session) = browser.cookie(ada, "forum_session")
+
+  assert browser.submit(ada, "/logout", []).status == 303
+  // The old session no longer signs anyone in, even if a client keeps it.
+  let replay = browser.new(app)
+  let old =
     browser.send(
-      post_form("/login", "", [
-        #("email", "ada@example.com"),
-        #("password", "correct horse"),
-      ]),
+      replay,
+      request.get("/threads/new") |> request.cookie("forum_session", session),
     )
-  res.status |> should.equal(303)
-  let cookie = session_cookie(res)
-  browser.send(post_form("/logout", cookie, [])).status |> should.equal(303)
-  // The old session no longer signs anyone in.
-  browser.send(get("/threads/new", cookie))
-  |> location
-  |> should.equal("/login")
+  assert response.location(old) == Ok("/login")
 }
 
 pub fn threads_and_replies_test() {
-  let #(browser, _) = browser()
-  browser.send(get("/threads/new", "")) |> location |> should.equal("/login")
-  let cookie = register(browser, "ada@example.com")
+  let app = app()
+  let visitor = browser.new(app)
+  assert response.location(browser.get(visitor, "/threads/new")) == Ok("/login")
 
-  let res =
-    browser.send(
-      post_form("/threads", cookie, [
-        #("title", "Hello there"),
-        #("body", "First post"),
-      ]),
-    )
-  location(res) |> should.equal("/threads/1")
-  browser.send(post_form("/threads", cookie, [#("title", ""), #("body", "x")])).status
-  |> should.equal(422)
+  let ada = browser.new(app)
+  register(ada, "ada@example.com")
+  let opened =
+    browser.submit(ada, "/threads", [
+      #("title", "Hello there"),
+      #("body", "First post"),
+    ])
+  assert response.location(opened) == Ok("/threads/1")
+  assert browser.submit(ada, "/threads", [#("title", ""), #("body", "x")]).status
+    == 422
 
-  let bob = register(browser, "bob@example.com")
-  browser.send(post_form("/threads/1/replies", bob, [#("body", "A reply")]))
-  |> location
-  |> should.equal("/threads/1#post-2")
+  let bob = browser.new(app)
+  register(bob, "bob@example.com")
+  let replied =
+    browser.submit(bob, "/threads/1/replies", [#("body", "A reply")])
+  assert response.location(replied) == Ok("/threads/1#post-2")
 
-  let page = browser.send(get("/threads/1", "")) |> text
-  string.contains(page, "First post") |> should.be_true
-  string.contains(page, "A reply") |> should.be_true
-  string.contains(page, "bob") |> should.be_true
-
-  browser.send(get("/", ""))
-  |> text
-  |> string.contains("1 reply")
-  |> should.be_true
-  browser.send(get("/threads/99", "")).status |> should.equal(404)
+  let thread = page(visitor, "/threads/1")
+  assert string.contains(thread, "First post")
+  assert string.contains(thread, "A reply")
+  assert string.contains(thread, "bob")
+  assert string.contains(page(visitor, "/"), "1 reply")
+  assert browser.get(visitor, "/threads/99").status == 404
 }
 
 pub fn profile_and_avatar_test() {
-  let #(browser, _) = browser()
-  let cookie = register(browser, "ada@example.com")
-  browser.send(
-    post_form("/profile", cookie, [
+  let app = app()
+  let ada = browser.new(app)
+  register(ada, "ada@example.com")
+  let saved =
+    browser.submit(ada, "/profile", [
       #("display_name", "Ada L"),
       #("bio", "Counts things"),
-    ]),
-  ).status
-  |> should.equal(303)
-  browser.send(get("/users/1", ""))
-  |> text
-  |> string.contains("Ada L")
-  |> should.be_true
+    ])
+  assert saved.status == 303
+  assert string.contains(page(browser.new(app), "/users/1"), "Ada L")
 
   let upload = fn(content_type, data: BitArray) {
-    let payload = <<
-      "--B\r\nContent-Disposition: form-data; name=\"avatar\"; filename=\"a\"\r\nContent-Type: ":utf8,
-      content_type:utf8,
-      "\r\n\r\n":utf8,
-      data:bits,
-      "\r\n--B--\r\n":utf8,
-    >>
     browser.send(
-      get("/profile/avatar", cookie)
-      |> request.set_method(http.Post)
-      |> request.set_header("content-type", "multipart/form-data; boundary=B")
-      |> request.set_body(body.from_bits(payload)),
+      ada,
+      request.post("/profile/avatar")
+        |> request.multipart([request.File("avatar", "a", content_type, data)]),
     )
   }
-  upload("image/png", <<"png bytes":utf8>>)
-  |> location
-  |> should.equal("/profile")
-  upload("text/plain", <<"x":utf8>>).status |> should.equal(415)
-  upload("image/png", <<0:size(16_000_008)>>).status |> should.equal(413)
+  assert response.location(upload("image/png", <<"png bytes":utf8>>))
+    == Ok("/profile")
+  assert upload("text/plain", <<"x":utf8>>).status == 415
+  assert upload("image/png", <<0:size(16_000_008)>>).status == 413
 
   let assert [path] =
-    browser.send(get("/profile", cookie))
-    |> text
-    |> string.split("src=\"")
-    |> list.drop(1)
-    |> list.map(fn(rest) {
-      rest |> string.split("\"") |> list.first |> unwrap("")
-    })
+    browser.get(ada, "/profile")
+    |> response.text
+    |> html.attribute_values("src")
     |> list.filter(string.starts_with(_, "/avatars/"))
-  let avatar = browser.send(get(path, ""))
-  avatar.status |> should.equal(200)
-  text(avatar) |> should.equal("png bytes")
+  let avatar = browser.get(ada, path)
+  assert avatar.status == 200
+  assert response.text(avatar) == "png bytes"
+}
+
+fn result_is_ok(result: Result(a, b)) -> Bool {
+  case result {
+    Ok(_) -> True
+    Error(_) -> False
+  }
 }
 
 @external(erlang, "os", "system_time")
