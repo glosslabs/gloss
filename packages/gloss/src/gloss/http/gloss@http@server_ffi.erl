@@ -8,9 +8,10 @@
          peer_address/1, ip_bytes/1, find/2,
          upload_open/1, upload_write/2, upload_close/1, upload_rename/2,
          upload_delete/1,
-         next/2, read_body/3, drain_requested/0, request_drain/1, await_go/0,
+         next/2, next_header/2, read_body/3, drain_requested/0, request_drain/1, await_go/0,
          go/1, rescue/1, http_date/0,
-         new_flag/0, raise_flag/1, flag_raised/1]).
+         new_flag/0, raise_flag/1, flag_raised/1,
+         stash/1, unstash/1, drop_stash/1]).
 
 %% --- Sockets ----------------------------------------------------------------
 
@@ -111,14 +112,8 @@ priv_dir(Name) ->
 next(Socket, Timeout) ->
     _ = inet:setopts(Socket, [{active, once}]),
     receive
-        {http, Socket, {http_request, Method, Uri, Version}} ->
-            {request_line, to_binary(Method), target(Uri), Version};
-        {http, Socket, {http_header, _, Name, _, Value}} ->
-            {header, string:lowercase(to_binary(Name)), Value};
-        {http, Socket, http_eoh} ->
-            end_of_headers;
-        {http, Socket, {http_error, Line}} ->
-            {bad_request, to_binary(Line)};
+        {http, Socket, Packet} ->
+            packet(Packet);
         {tcp_error, Socket, emsgsize} ->
             line_too_long;
         {tcp_closed, Socket} ->
@@ -130,6 +125,36 @@ next(Socket, Timeout) ->
     after Timeout ->
         timeout
     end.
+
+%% The next packet once a request has started, read without arming the
+%% socket. A drain request waits in the mailbox for drain_requested/0.
+next_header(Socket, Timeout) ->
+    case gen_tcp:recv(Socket, 0, Timeout) of
+        {ok, Packet} -> packet(Packet);
+        {error, timeout} -> timeout;
+        {error, emsgsize} -> line_too_long;
+        {error, _} -> connection_closed
+    end.
+
+packet({http_request, Method, Uri, Version}) ->
+    {request_line, to_binary(Method), target(Uri), Version};
+packet({http_header, _, Name, _, Value}) ->
+    {header, header_name(Name), Value};
+packet(http_eoh) ->
+    end_of_headers;
+packet({http_error, Line}) ->
+    {bad_request, to_binary(Line)}.
+
+%% Lowercase. Known names arrive as atoms in canonical case, e.g.
+%% 'Content-Length'; others as binaries. Names are ASCII tokens.
+header_name(Name) when is_atom(Name) ->
+    ascii_lowercase(atom_to_binary(Name));
+header_name(Name) ->
+    ascii_lowercase(Name).
+
+ascii_lowercase(Bin) ->
+    << <<(case C of _ when C >= $A, C =< $Z -> C + 32; _ -> C end)>>
+       || <<C>> <= Bin >>.
 
 %% Read exactly `Length` body bytes, then return to header parsing for the
 %% next request on the connection.
@@ -218,6 +243,21 @@ go(Pid) ->
     Pid ! gloss_http_go,
     nil.
 
+%% A server's request pipeline, kept in persistent_term so the process
+%% spawned for each request reads it without copying the routes and state
+%% it captures. Dropped when the server stops.
+stash(Value) ->
+    Key = {gloss_http_stash, make_ref()},
+    persistent_term:put(Key, Value),
+    Key.
+
+unstash(Key) ->
+    persistent_term:get(Key).
+
+drop_stash(Key) ->
+    _ = persistent_term:erase(Key),
+    nil.
+
 %% A flag any process can raise or read without messages, e.g. whether the
 %% server is draining.
 new_flag() ->
@@ -257,8 +297,17 @@ arity(Args) when is_list(Args) -> length(Args);
 arity(Arity) -> Arity.
 
 %% An IMF-fixdate for the `date` header, e.g. `Tue, 06 Oct 2026 12:00:00 GMT`.
+%% Each process formats it at most once a second.
 http_date() ->
-    format_date(calendar:universal_time()).
+    Now = erlang:system_time(second),
+    case get(gloss_http_date) of
+        {Now, Date} ->
+            Date;
+        _ ->
+            Date = http_date(Now),
+            put(gloss_http_date, {Now, Date}),
+            Date
+    end.
 
 %% The same for a time in Unix seconds.
 http_date(Seconds) ->
@@ -269,8 +318,11 @@ format_date({{Y, Mo, D} = Date, {H, Mi, S}}) ->
                   {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}),
     Month = element(Mo, {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul",
                          "Aug", "Sep", "Oct", "Nov", "Dec"}),
-    iolist_to_binary(io_lib:format("~s, ~2..0w ~s ~4..0w ~2..0w:~2..0w:~2..0w GMT",
-                                   [Day, D, Month, Y, H, Mi, S])).
+    iolist_to_binary([Day, ", ", pad2(D), " ", Month, " ", integer_to_binary(Y),
+                      " ", pad2(H), ":", pad2(Mi), ":", pad2(S), " GMT"]).
+
+pad2(N) when N < 10 -> [$0, $0 + N];
+pad2(N) -> integer_to_binary(N).
 
 pdict_get(Key) ->
     case get(Key) of

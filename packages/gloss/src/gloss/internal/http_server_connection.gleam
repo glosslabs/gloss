@@ -103,7 +103,7 @@ fn read_headers(
   count: Int,
   draining: Bool,
 ) -> Nil {
-  case tcp.next(socket, settings.header_timeout) {
+  case tcp.next_header(socket, settings.header_timeout) {
     tcp.Header(name:, value:) ->
       case count >= settings.max_headers {
         True -> reject(socket, settings, accept(head), 431, TooManyHeaders)

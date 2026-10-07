@@ -450,13 +450,18 @@ fn start_control(
   table: router.Table(state),
 ) -> Result(actor.Started(Server), actor.StartError) {
   let draining = new_flag()
-  let pipeline = pipeline(builder, table, draining)
+  // Every request runs in a new process, which gets a copy of everything
+  // its function captures. The pipeline captures the routes and the state,
+  // so it is kept where processes read it without copying, and the
+  // handler captures only the key.
+  let pipeline = stash(pipeline(builder, table, draining))
+  let error_page = builder.error_page
   let settings =
     connection.Settings(
-      handler: pipeline,
+      handler: fn(request, peer) { unstash(pipeline)(request, peer) },
       peer: "",
       render: fn(response, accept) {
-        reply_render.render(response, accept, builder.error_page)
+        reply_render.render(response, accept, error_page)
       },
       max_body: builder.max_body,
       header_timeout: ms(builder.header_timeout),
@@ -493,6 +498,7 @@ fn start_control(
       },
       on_drain: fn() { raise_flag(draining) },
       drain_delay: ms(builder.drain_delay),
+      on_stop: fn() { drop_stash(pipeline) },
     )
   use started <- result.map(control.start(config))
   let port = started.data.port
@@ -828,6 +834,18 @@ fn monotonic_time(unit: Atom) -> Int
 
 @external(erlang, "gloss@http@server_ffi", "rescue")
 fn rescue(work: fn() -> a) -> Result(a, String)
+
+/// A value kept in `persistent_term`, which processes read without copying.
+type Stash(a)
+
+@external(erlang, "gloss@http@server_ffi", "stash")
+fn stash(value: a) -> Stash(a)
+
+@external(erlang, "gloss@http@server_ffi", "unstash")
+fn unstash(stash: Stash(a)) -> a
+
+@external(erlang, "gloss@http@server_ffi", "drop_stash")
+fn drop_stash(stash: Stash(a)) -> Nil
 
 /// Raised when shutdown begins.
 type Flag

@@ -41,6 +41,8 @@ pub type Config {
     /// Milliseconds to keep accepting and serving after shutdown begins,
     /// before the listen socket closes.
     drain_delay: Int,
+    /// Called once the server has stopped.
+    on_stop: fn() -> Nil,
   )
 }
 
@@ -80,6 +82,7 @@ type State {
     shutdown_timeout: Int,
     on_drain: fn() -> Nil,
     drain_delay: Int,
+    on_stop: fn() -> Nil,
     /// Shutdown has begun but the drain delay hasn't passed.
     closing: Option(Drain),
     /// The listen socket is closed and connections are draining.
@@ -135,6 +138,7 @@ pub fn start(
           shutdown_timeout: config.shutdown_timeout,
           on_drain: config.on_drain,
           drain_delay: config.drain_delay,
+          on_stop: config.on_stop,
           closing: None,
           draining: None,
           max_connections: config.max_connections,
@@ -321,6 +325,7 @@ fn finish_if_drained(state: State) -> actor.Next(State, Message) {
 }
 
 fn stop(state: State, result: Result(Nil, Int)) -> actor.Next(State, Message) {
+  state.on_stop()
   case state.draining {
     Some(Drain(reply: Some(reply), ..)) -> process.send(reply, result)
     _ -> Nil

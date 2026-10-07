@@ -74,8 +74,16 @@ pub fn sendfile(
 @external(erlang, "gloss@http@server_ffi", "peer_address")
 pub fn peer_address(socket: Socket) -> String
 
+/// The next event while waiting for a request: a request line, a drain
+/// request, the timeout, or the connection closing.
 @external(erlang, "gloss@http@server_ffi", "next")
 pub fn next(socket: Socket, timeout: Int) -> Event
+
+/// The next header line, read as soon as it arrives without waiting on the
+/// mailbox, so never `Drain`: a drain request stays queued for
+/// `drain_requested`.
+@external(erlang, "gloss@http@server_ffi", "next_header")
+pub fn next_header(socket: Socket, timeout: Int) -> Event
 
 @external(erlang, "gloss@http@server_ffi", "read_body")
 pub fn read_body(
