@@ -8,7 +8,7 @@ minimal. Users, threads and posts are stored in Postgres through
 `gloss/sql` and `gloss/pg`, and avatars on disk.
 
 ```sh
-docker run -d --name forum-db -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=forum postgres:17
+mise run db             # Postgres 18 in Docker, from compose.yaml
 mise run dev            # listens on :4000, creating the tables it needs
 open http://localhost:4000
 ```

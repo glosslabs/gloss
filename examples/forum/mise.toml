@@ -4,6 +4,10 @@
 description = "Run the server on :4000 (PORT, APP_ENV, DATA_DIR, LOG_DIR, SENTRY_DSN, DATABASE_URL)"
 run = "gleam run"
 
+[tasks.db]
+description = "Start Postgres in Docker (compose.yaml) and wait until it is ready"
+run = "docker compose up -d --wait"
+
 [tasks.test]
 description = "Run the tests"
 run = "gleam test"
