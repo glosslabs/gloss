@@ -66,6 +66,13 @@ pub type Logger {
   )
 }
 
+/// A logger whose functions all deliver entries through `write`.
+///
+/// Closures that wrap another logger capture only its `write`, never the
+/// whole record. A `Logger` is copied into every process it reaches (each
+/// request's handler process, for one), and copying doesn't preserve
+/// sharing: capturing the record makes each layer of `stack`, `min_level`
+/// and the like six times bigger to copy than the one it wraps.
 pub fn new(write: Writer) -> Logger {
   let log = fn(level, message, meta) {
     write(Entry(level:, message:, meta:, at: timestamp.system_time()))
@@ -82,18 +89,20 @@ pub fn new(write: Writer) -> Logger {
 
 /// Write every entry to each logger, in order.
 pub fn stack(loggers: List(Logger)) -> Logger {
+  let writes = list.map(loggers, fn(logger) { logger.write })
   new(fn(record) {
-    use logger <- list.each(loggers)
-    logger.write(record)
+    use write <- list.each(writes)
+    write(record)
   })
 }
 
 /// Drop entries below `level`.
 pub fn min_level(logger: Logger, level: Level) -> Logger {
   let floor = rank(level)
+  let write = logger.write
   new(fn(record) {
     case rank(record.level) >= floor {
-      True -> logger.write(record)
+      True -> write(record)
       False -> Nil
     }
   })
@@ -110,9 +119,10 @@ pub fn min_level(logger: Logger, level: Level) -> Logger {
 /// ```
 pub fn max_level(logger: Logger, level: Level) -> Logger {
   let ceiling = rank(level)
+  let write = logger.write
   new(fn(record) {
     case rank(record.level) <= ceiling {
-      True -> logger.write(record)
+      True -> write(record)
       False -> Nil
     }
   })
@@ -120,8 +130,9 @@ pub fn max_level(logger: Logger, level: Level) -> Logger {
 
 /// Prepend `context` to every entry's meta. Context added earlier comes first.
 pub fn with_context(logger: Logger, context: Meta) -> Logger {
+  let write = logger.write
   new(fn(record) {
-    logger.write(Entry(..record, meta: list.append(context, record.meta)))
+    write(Entry(..record, meta: list.append(context, record.meta)))
   })
 }
 
@@ -208,7 +219,8 @@ fn rank(level: Level) -> Int {
 
 /// A tracer handler that logs every event as `from_event` describes.
 pub fn trace_handler(logger: Logger) -> tracer.Handler {
-  fn(event) { logger.write(from_event(event)) }
+  let write = logger.write
+  fn(event) { write(from_event(event)) }
 }
 
 /// The entry for a tracer event. The message is `source` and `name`

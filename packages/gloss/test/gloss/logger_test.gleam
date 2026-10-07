@@ -241,3 +241,23 @@ pub fn split_channels_test() {
   drain(out) |> list.map(fn(r) { r.message }) |> should.equal(["d", "i"])
   drain(err) |> list.map(fn(r) { r.message }) |> should.equal(["w", "e"])
 }
+
+// A logger is copied into every process it reaches, and copying expands
+// shared terms. Layers of combinators must grow its copy linearly, not
+// geometrically.
+pub fn layered_loggers_stay_cheap_to_copy_test() {
+  let channel = fn() {
+    logger.stack([
+      logger.discard() |> logger.max_level(logger.Info),
+      logger.discard() |> logger.min_level(logger.Warning),
+    ])
+  }
+  let log =
+    logger.stack([channel(), channel()])
+    |> logger.with_context([])
+    |> logger.with_context([])
+  assert flat_size(log) < 2000
+}
+
+@external(erlang, "erts_debug", "flat_size")
+fn flat_size(term: a) -> Int
