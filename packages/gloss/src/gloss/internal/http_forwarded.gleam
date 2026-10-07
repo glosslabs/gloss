@@ -65,13 +65,14 @@ fn prefix_matches(network: List(Int), address: List(Int), bits: Int) -> Bool {
 /// connection came from a trusted proxy; then the client is the rightmost
 /// address that isn't a trusted proxy, so addresses a client adds at the
 /// left can't be used to pose as someone else. `Forwarded` (RFC 7239) wins
-/// over the `X-Forwarded-*` headers.
+/// over the `X-Forwarded-*` headers. A peer on a Unix domain socket
+/// (`"unix"`) is on this machine, so it is always trusted.
 pub fn resolve(
   headers: List(#(String, String)),
   peer: String,
   trusted: List(Cidr),
 ) -> Origin {
-  case contains(trusted, peer) {
+  case peer == "unix" || contains(trusted, peer) {
     False -> Origin(client_ip: peer, scheme: None, host: None)
     True -> {
       let elements = forwarded(headers)

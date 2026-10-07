@@ -1,6 +1,6 @@
 -module(gloss@http@server_ffi).
 
--export([listen/3, port/1, accept/1, controlling_process/2, close/1, send/2,
+-export([listen_unix/2, close_listener/1, listen/3, port/1, accept/1, controlling_process/2, close/1, send/2,
          sendfile/4, read_range/3, file_info/1, priv_dir/1, read_line/2,
          unmask/2, arm_raw/1, is_drain/1, http_date/1, pdict_get/1,
          gzip/1, gzip_open/0, gzip_chunk/2, gzip_finish/1,
@@ -38,9 +38,52 @@ listen(Interface, Port, Backlog) ->
             end
     end.
 
+%% Listen on a Unix domain socket at Path. A socket file left by a server
+%% that crashed is removed first, but only when it is a socket and nothing
+%% answers on it.
+listen_unix(Path, Backlog) ->
+    case clear_stale(Path) of
+        {error, _} = Error -> Error;
+        ok ->
+            Options = [binary, local, {ifaddr, {local, Path}},
+                       {packet, http_bin}, {packet_size, 16384},
+                       {active, false}, {backlog, Backlog},
+                       {send_timeout, 30000}, {send_timeout_close, true},
+                       {exit_on_close, false}],
+            case gen_tcp:listen(0, Options) of
+                {ok, Socket} -> {ok, Socket};
+                {error, eaddrinuse} -> {error, address_in_use};
+                {error, Reason} -> {error, {other, describe(Reason)}}
+            end
+    end.
+
+clear_stale(Path) ->
+    case file:read_link_info(Path) of
+        {error, enoent} -> ok;
+        {ok, Info} when element(3, Info) =:= other ->
+            case gen_tcp:connect({local, Path}, 0, [local], 1000) of
+                {ok, S} -> gen_tcp:close(S), {error, address_in_use};
+                {error, _} -> _ = file:delete(Path), ok
+            end;
+        {ok, _} -> {error, {other, <<"the path exists and is not a socket">>}};
+        {error, Reason} -> {error, {other, describe(Reason)}}
+    end.
+
+%% Close a listen socket, removing a Unix socket's file.
+close_listener(Socket) ->
+    Name = inet:sockname(Socket),
+    _ = gen_tcp:close(Socket),
+    case Name of
+        {ok, {local, Path}} -> _ = file:delete(Path), nil;
+        _ -> nil
+    end.
+
+%% The port of a TCP listen socket; 0 for a Unix socket.
 port(Socket) ->
-    {ok, Port} = inet:port(Socket),
-    Port.
+    case inet:port(Socket) of
+        {ok, Port} when is_integer(Port) -> Port;
+        _ -> 0
+    end.
 
 accept(Listen) ->
     case gen_tcp:accept(Listen) of
@@ -392,8 +435,10 @@ inflate_end(Z) ->
 %% --- Peers and proxies --------------------------------------------------------
 
 %% The connection's remote address as text, e.g. <<"203.0.113.7">>.
+%% "unix" for a connection over a Unix domain socket.
 peer_address(Socket) ->
     case inet:peername(Socket) of
+        {ok, {local, _}} -> <<"unix">>;
         {ok, {Address, _Port}} -> list_to_binary(inet:ntoa(normalise(Address)));
         _ -> <<"">>
     end.

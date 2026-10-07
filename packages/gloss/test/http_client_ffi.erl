@@ -1,5 +1,5 @@
 -module(http_client_ffi).
--export([connect/1, send/2, read_response/2, read_head/2, is_closed/2, close/1]).
+-export([connect/1, connect_unix/1, make_file/1, stale_socket/1, exists/1, send/2, read_response/2, read_head/2, is_closed/2, close/1]).
 
 %% A minimal HTTP/1.1 client over a raw socket, for exercising the server's
 %% connection handling.
@@ -9,6 +9,25 @@ connect(Port) ->
         {ok, Socket} -> {ok, Socket};
         {error, _} -> {error, nil}
     end.
+
+connect_unix(Path) ->
+    case gen_tcp:connect({local, Path}, 0, [local, binary, {active, false}], 1000) of
+        {ok, Socket} -> {ok, Socket};
+        {error, _} -> {error, nil}
+    end.
+
+make_file(Path) ->
+    ok = filelib:ensure_dir(Path),
+    ok = file:write_file(Path, <<"not a socket">>),
+    nil.
+
+%% Leave a socket file with nothing listening, as a crash would.
+stale_socket(Path) ->
+    {ok, S} = gen_tcp:listen(0, [local, {ifaddr, {local, Path}}]),
+    ok = gen_tcp:close(S),
+    nil.
+
+exists(Path) -> element(1, file:read_link_info(Path)) =:= ok.
 
 send(Socket, Data) ->
     ok = gen_tcp:send(Socket, Data),

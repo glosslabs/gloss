@@ -23,6 +23,8 @@ pub type Config {
   Config(
     interface: String,
     port: Int,
+    /// A Unix domain socket path to listen on instead of the interface.
+    unix_socket: Option(String),
     acceptors: Int,
     /// Milliseconds to wait for connections to drain.
     shutdown_timeout: Int,
@@ -108,7 +110,11 @@ pub fn start(
 ) -> Result(actor.Started(Handle), actor.StartError) {
   actor.new_with_initialiser(5000, fn(self) {
     process.trap_exits(True)
-    case tcp.listen(config.interface, config.port, 1024) {
+    let listening = case config.unix_socket {
+      Some(path) -> tcp.listen_unix(path, 1024)
+      None -> tcp.listen(config.interface, config.port, 1024)
+    }
+    case listening {
       Error(error) -> Error(describe(listen_error(error)))
       Ok(listener) -> {
         let port = tcp.port(listener)

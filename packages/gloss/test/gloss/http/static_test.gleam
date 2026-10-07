@@ -3,6 +3,7 @@ import gleam/http
 import gleam/http/request
 import gleam/int
 import gleam/list
+import gleam/option.{Some}
 import gleam/string
 import gleeunit/should
 import gloss/http/router
@@ -73,6 +74,66 @@ pub fn unsafe_and_missing_paths_are_not_found_test() {
     "/assets/missing.css",
   ]
   |> list.each(fn(path) { get(dir, path).status |> should.equal(404) })
+}
+
+fn spa(dir: String) {
+  let app =
+    static.new(dir)
+    |> static.cache_control("public, max-age=31536000, immutable")
+    |> static.index(True)
+    |> static.fallback(Some("sub/index.html"))
+    |> static.handler
+  router.new()
+  |> router.get("/", app)
+  |> router.get("/*path", app)
+  |> server.new(Nil)
+}
+
+fn page(path: String) {
+  request(http.Get, path) |> request.set_header("accept", "text/html,*/*;q=0.8")
+}
+
+pub fn directories_serve_their_index_test() {
+  let dir = site()
+  let res = server.handle(spa(dir), page("/sub/"))
+  res.status |> should.equal(200)
+  rendered_body(res) |> should.equal("<p>hi</p>")
+  header(res, "content-type") |> should.equal("text/html; charset=utf-8")
+  // The index is never cached as immutable, whatever the assets are.
+  header(res, "cache-control") |> should.equal("no-cache")
+
+  let res =
+    server.handle(spa(dir), page("/sub") |> request.set_query([#("tab", "2")]))
+  res.status |> should.equal(301)
+  header(res, "location") |> should.equal("/sub/?tab=2")
+
+  // Without index, a directory is still not found.
+  get(dir, "/assets/sub").status |> should.equal(404)
+  get(dir, "/assets/sub/").status |> should.equal(404)
+}
+
+pub fn fallback_serves_pages_the_app_routes_test() {
+  let dir = site()
+  let res = server.handle(spa(dir), page("/threads/42"))
+  res.status |> should.equal(200)
+  rendered_body(res) |> should.equal("<p>hi</p>")
+  header(res, "cache-control") |> should.equal("no-cache")
+
+  // The root has no index of its own, so it falls back too.
+  server.handle(spa(dir), page("/"))
+  |> rendered_body
+  |> should.equal("<p>hi</p>")
+
+  // Real files are served as they are, with their own cache-control.
+  let res = server.handle(spa(dir), page("/app.css"))
+  rendered_body(res) |> should.equal("body{}")
+  header(res, "cache-control")
+  |> should.equal("public, max-age=31536000, immutable")
+
+  // A missing asset fetched by a script or tag is still 404, as are dotfiles.
+  server.handle(spa(dir), request(http.Get, "/missing.js")).status
+  |> should.equal(404)
+  server.handle(spa(dir), page("/.env")).status |> should.equal(404)
 }
 
 pub fn head_has_length_but_no_body_test() {

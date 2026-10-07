@@ -102,6 +102,7 @@ pub opaque type Builder(state) {
     state: state,
     interface: String,
     port: Int,
+    unix_socket: Option(String),
     tracer: Tracer,
     logger: Logger,
     middleware: List(Middleware(state)),
@@ -134,6 +135,7 @@ pub opaque type Server {
   )
 }
 
+/// `interface` is `"unix:"` and the path for a Unix domain socket.
 pub type Started {
   Started(interface: String, port: Int)
 }
@@ -170,6 +172,7 @@ pub fn new(router: Router(state), state: state) -> Builder(state) {
     state:,
     interface: "127.0.0.1",
     port: 4000,
+    unix_socket: None,
     tracer: tracer.new(),
     logger: logger.discard(),
     middleware: [],
@@ -201,6 +204,18 @@ pub fn port(builder: Builder(state), port: Int) -> Builder(state) {
 /// `"::"` for every IPv6 one.
 pub fn bind(builder: Builder(state), interface: String) -> Builder(state) {
   Builder(..builder, interface:)
+}
+
+/// Listen on a Unix domain socket at `path` instead of a TCP port, for a
+/// reverse proxy on the same machine, e.g. nginx's
+/// `proxy_pass http://unix:/run/app.sock;`. The socket file is removed when
+/// the server stops, and a stale one left by a crash is replaced. Only
+/// processes on this machine can connect, so forwarding headers are
+/// believed without `trust_proxies`; without them `ctx.client_ip` is
+/// `"unix"`. Connecting needs write permission on the file, which follows
+/// the process's umask.
+pub fn bind_unix(builder: Builder(state), path: String) -> Builder(state) {
+  Builder(..builder, unix_socket: Some(path))
 }
 
 pub fn tracer(builder: Builder(state), tracer: Tracer) -> Builder(state) {
@@ -415,7 +430,7 @@ pub fn supervised(builder: Builder(state)) -> ChildSpecification(Server) {
   |> supervision.restart(supervision.Transient)
 }
 
-/// The port the server is listening on.
+/// The port the server is listening on; `0` on a Unix domain socket.
 pub fn port_of(server: Server) -> Int {
   server.handle.port
 }
@@ -474,6 +489,7 @@ fn start_control(
     control.Config(
       interface: builder.interface,
       port: builder.port,
+      unix_socket: builder.unix_socket,
       acceptors: builder.acceptors,
       shutdown_timeout: ms(builder.shutdown_timeout),
       serve: connection.serve(_, settings),
@@ -502,7 +518,11 @@ fn start_control(
     )
   use started <- result.map(control.start(config))
   let port = started.data.port
-  let info = Started(interface: builder.interface, port:)
+  let interface = case builder.unix_socket {
+    Some(path) -> "unix:" <> path
+    None -> builder.interface
+  }
+  let info = Started(interface:, port:)
   list.each(builder.on_started, fn(f) { f(info) })
   tracer.point(
     builder.tracer,
@@ -511,7 +531,7 @@ fn start_control(
     level: tracer.Info,
     meta: fn() {
       [
-        #("interface", meta.String(builder.interface)),
+        #("interface", meta.String(interface)),
         #("port", meta.Int(port)),
       ]
     },
@@ -529,7 +549,11 @@ fn start_control(
 
 fn start_error(builder: Builder(state), error: actor.StartError) -> StartError {
   case control.start_error(error) {
-    control.AddressInUse -> AddressInUse(builder.port)
+    control.AddressInUse ->
+      case builder.unix_socket {
+        Some(path) -> Unavailable("another server is listening on " <> path)
+        None -> AddressInUse(builder.port)
+      }
     control.InvalidInterface -> InvalidInterface(builder.interface)
     control.ListenFailed(reason) -> Unavailable(reason)
   }

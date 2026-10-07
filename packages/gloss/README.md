@@ -76,10 +76,10 @@ larger apps can give separate route groups their own state.
 
 | Module | |
 |---|---|
-| `gloss/http/server` | Builder (`new`, `port`, `bind`, `tracer`, `logger`, `with`, `trust_proxies`, `request_timeout`, `max_connections`, limits), `start`, `supervised`, `shutdown`, and `handle` for tests |
+| `gloss/http/server` | Builder (`new`, `port`, `bind`, `bind_unix`, `tracer`, `logger`, `with`, `trust_proxies`, `request_timeout`, `max_connections`, limits), `start`, `supervised`, `shutdown`, and `handle` for tests |
 | `gloss/http/router` | `group`, `with`, `get`/`post`/…, `combine`, `check`, `describe`, `inspect`, `allowed_methods` |
 | `gloss/http/context` | `Context(state)`, `Handler`, `Middleware`, `param`/`int_param` |
-| `gloss/http/reply` | `Request`/`Response`/`Body` types, `json`, `text`, `html`, `bytes`, `stream`, `empty`, error replies (`error`, `problem`, `not_found`, …), `preferred` |
+| `gloss/http/reply` | `Request`/`Response`/`Body` types, `json`, `text`, `html`, `bytes`, `stream`, `empty`, error replies (`error`, `problem`, `not_found`, …), `preferred`, and `fresh` for ETag revalidation |
 | `gloss/http/body` | Read bodies on demand: `json`, `text`, `bits`, `form` (urlencoded or multipart; up to `max_body`), or `stream`/`fold` for large uploads; gzipped bodies are inflated |
 | `gloss/http/multipart` | Stream `multipart/form-data` uploads part by part |
 | `gloss/http/upload` | Save an uploaded file to disk as it arrives, with type and size limits |
@@ -89,7 +89,7 @@ larger apps can give separate route groups their own state.
 | `gloss/http/session` | Server-side sessions: `load`, `get`/`set`/`remove`, `save`, `regenerate`, `destroy`, over a pluggable `Store` |
 | `gloss/http/session/memory` | The default store: an ETS table swept of expired sessions every minute |
 | `gloss/http/csrf` | Cross-site request forgery protection from `Sec-Fetch-Site` and `Origin`, with no tokens |
-| `gloss/http/static` | Files from a directory via `sendfile`, with content types, ETag revalidation, byte ranges (including multipart) for media, pre-compressed `.br`/`.gz` copies, and `cache-control` |
+| `gloss/http/static` | Files from a directory via `sendfile`, with content types, ETag revalidation, byte ranges (including multipart) for media, pre-compressed `.br`/`.gz` copies, `cache-control`, directory indexes and a single-page-app fallback |
 | `gloss/http/sse` | Server-sent events over a streamed response |
 | `gloss/http/compress` | gzip middleware for JSON, text and streamed responses, by `accept-encoding` |
 | `gloss/http/websocket` | WebSocket upgrades: `on_init`/`on_message`/`on_close` with a `CloseReason`, queued sends with a per-socket writer and `max_queue`, `sender`/`push_text` and `join`/`broadcast_text` groups, subprotocols, `permessage-deflate`, pings and idle timeouts, `close(code, reason)`, a span per socket, and cross-site upgrades refused |

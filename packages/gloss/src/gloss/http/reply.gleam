@@ -24,6 +24,7 @@
 //// details.
 
 import gleam/bytes_tree.{type BytesTree}
+import gleam/http
 import gleam/http/request
 import gleam/http/response
 import gleam/json.{type Json}
@@ -130,6 +131,40 @@ pub fn stream(
 /// A response with no body, e.g. `empty(204)`.
 pub fn empty(status: Int) -> Response {
   response.new(status) |> response.set_body(Empty)
+}
+
+/// Answer `304 Not Modified` when the client's cached copy, named by
+/// `if-none-match`, is still current; otherwise build the response with
+/// `next`, adding the `etag` when it succeeds. Compute the tag from
+/// something cheaper than the page, such as a row's version or update time:
+///
+/// ```gleam
+/// use <- reply.fresh(req, "thread-" <> int.to_string(thread.version))
+/// reply.html(200, render(thread))
+/// ```
+///
+/// A tag without quotes is quoted for you; a weak one (`W/"..."`) is kept
+/// as it is. For a request other than `GET` or `HEAD`, a match means the
+/// client's copy is current and it must not be changed blindly, so it is
+/// answered `412 Precondition Failed` instead.
+pub fn fresh(req: Request, etag: String, next: fn() -> Response) -> Response {
+  let etag = case etag {
+    "\"" <> _ | "W/\"" <> _ -> etag
+    _ -> "\"" <> etag <> "\""
+  }
+  let current =
+    reply_negotiate.none_match(request.get_header(req, "if-none-match"), etag)
+  case current, req.method {
+    True, http.Get | True, http.Head ->
+      empty(304) |> response.set_header("etag", etag)
+    True, _ -> error(412, "precondition failed")
+    False, _ ->
+      case next() {
+        res if res.status >= 200 && res.status < 300 ->
+          response.set_header(res, "etag", etag)
+        res -> res
+      }
+  }
 }
 
 /// A `303 See Other` to `location`.

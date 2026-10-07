@@ -1,5 +1,6 @@
 import gleam/http
 import gleam/http/request
+import gleam/http/response
 import gleam/string
 import gleeunit/should
 import gloss/http/reply
@@ -104,4 +105,53 @@ pub fn panics_are_negotiated_test() {
     )
   res.status |> should.equal(500)
   rendered_body(res) |> should.equal("internal server error")
+}
+
+fn conditional(method: http.Method, if_none_match: String) {
+  let req = case if_none_match {
+    "" -> request(method, "/")
+    tag -> request(method, "/") |> request.set_header("if-none-match", tag)
+  }
+  use <- reply.fresh(req, "v7")
+  reply.text(200, "page")
+}
+
+pub fn fresh_builds_the_page_with_its_etag_test() {
+  let res = conditional(http.Get, "")
+  res.status |> should.equal(200)
+  header(res, "etag") |> should.equal("\"v7\"")
+  res.body |> should.equal(reply.Text("page"))
+
+  conditional(http.Get, "\"v6\"").status |> should.equal(200)
+}
+
+pub fn fresh_answers_304_for_a_current_copy_test() {
+  let res = conditional(http.Get, "\"v6\", W/\"v7\"")
+  res.status |> should.equal(304)
+  header(res, "etag") |> should.equal("\"v7\"")
+  res.body |> should.equal(reply.Empty)
+
+  conditional(http.Head, "*").status |> should.equal(304)
+}
+
+pub fn fresh_refuses_unsafe_methods_on_a_match_test() {
+  conditional(http.Put, "\"v7\"").status |> should.equal(412)
+  conditional(http.Put, "\"v6\"").status |> should.equal(200)
+}
+
+pub fn fresh_keeps_quoted_and_weak_tags_and_skips_errors_test() {
+  let req = request(http.Get, "/")
+  {
+    use <- reply.fresh(req, "W/\"a\"")
+    reply.text(200, "")
+  }
+  |> header("etag")
+  |> should.equal("W/\"a\"")
+
+  let res = {
+    use <- reply.fresh(req, "a")
+    reply.not_found()
+  }
+  res.status |> should.equal(404)
+  response.get_header(res, "etag") |> should.equal(Error(Nil))
 }

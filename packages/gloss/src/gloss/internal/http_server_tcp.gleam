@@ -42,10 +42,18 @@ pub fn listen(
   backlog: Int,
 ) -> Result(ListenSocket, ListenError)
 
+/// Listen on a Unix domain socket at `path`.
+@external(erlang, "gloss@http@server_ffi", "listen_unix")
+pub fn listen_unix(
+  path: String,
+  backlog: Int,
+) -> Result(ListenSocket, ListenError)
+
 @external(erlang, "gloss@http@server_ffi", "port")
 pub fn port(socket: ListenSocket) -> Int
 
-@external(erlang, "gloss@http@server_ffi", "close")
+/// Close a listen socket; a Unix socket's file is removed.
+@external(erlang, "gloss@http@server_ffi", "close_listener")
 pub fn close_listener(socket: ListenSocket) -> Nil
 
 @external(erlang, "gloss@http@server_ffi", "accept")

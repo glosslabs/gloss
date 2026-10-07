@@ -1,4 +1,5 @@
-//// Choosing a media type from an `Accept` header.
+//// Choosing a media type from an `Accept` header, and matching validators
+//// in conditional requests.
 
 import gleam/float
 import gleam/int
@@ -127,5 +128,27 @@ pub fn accepts_encoding(header: Result(String, Nil), coding: String) -> Bool {
         Error(Nil), Error(Nil) -> False
       }
     }
+  }
+}
+
+/// Whether an `if-none-match` header names `etag` (or is `*`). A weak
+/// comparison: `W/` prefixes are ignored.
+pub fn none_match(header: Result(String, Nil), etag: String) -> Bool {
+  let etag = case etag {
+    "W/" <> etag -> etag
+    etag -> etag
+  }
+  case header {
+    Ok(header) ->
+      header
+      |> string.split(",")
+      |> list.map(fn(tag) {
+        case string.trim(tag) {
+          "W/" <> tag -> tag
+          tag -> tag
+        }
+      })
+      |> list.any(fn(tag) { tag == etag || tag == "*" })
+    Error(Nil) -> False
   }
 }

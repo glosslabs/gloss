@@ -28,6 +28,21 @@
 //// |> static.cache_control("public, max-age=31536000, immutable")
 //// |> static.handler
 //// ```
+////
+//// A single-page app serves `index.html` for a directory and the same file
+//// for every page the browser asks for that isn't a file. The wildcard
+//// doesn't match an empty path, so the root gets its own route:
+////
+//// ```gleam
+//// let app =
+////   static.new(dir)
+////   |> static.index(True)
+////   |> static.fallback(Some("index.html"))
+////   |> static.handler
+//// router.new()
+//// |> router.get("/", app)
+//// |> router.get("/*path", app)
+//// ```
 
 import gleam/bit_array
 import gleam/bytes_tree
@@ -49,6 +64,8 @@ pub opaque type Config {
     cache_control: String,
     param: String,
     precompressed: Bool,
+    index: Bool,
+    fallback: Option(String),
   )
 }
 
@@ -60,6 +77,8 @@ pub fn new(directory: String) -> Config {
     cache_control: "no-cache",
     param: "path",
     precompressed: False,
+    index: False,
+    fallback: None,
   )
 }
 
@@ -79,6 +98,21 @@ pub fn precompressed(config: Config, enabled: Bool) -> Config {
   Config(..config, precompressed: enabled)
 }
 
+/// Serve `index.html` for a directory that has one. A request for the
+/// directory without a trailing slash is redirected to it with one, so the
+/// page's relative links resolve.
+pub fn index(config: Config, enabled: Bool) -> Config {
+  Config(..config, index: enabled)
+}
+
+/// A file, relative to the directory, to serve for a request that names no
+/// file, such as `index.html` for a single-page app that routes in the
+/// browser. It answers only requests that accept `text/html`, so a missing
+/// script or image is still `404`.
+pub fn fallback(config: Config, file: Option(String)) -> Config {
+  Config(..config, fallback: file)
+}
+
 /// `handler(new(directory))`.
 pub fn files(directory: String) -> Handler(state) {
   handler(new(directory))
@@ -86,10 +120,57 @@ pub fn files(directory: String) -> Handler(state) {
 
 pub fn handler(config: Config) -> Handler(state) {
   fn(req: Request, ctx: Context(state)) {
-    case context.param(ctx, config.param) |> result.try(safe_path) {
+    // A route without the wildcard, such as "/", serves the directory.
+    let wanted = context.param(ctx, config.param) |> result.unwrap("")
+    case safe_path(wanted) {
       Error(Nil) -> reply.not_found()
-      Ok(relative) -> serve(req, config, config.directory <> "/" <> relative)
+      Ok(relative) -> {
+        let path = case relative {
+          "" -> config.directory
+          _ -> config.directory <> "/" <> relative
+        }
+        case file_info(path), indexed(config, path) {
+          Ok(_), _ -> serve(req, config, path, config.cache_control)
+          _, Ok(index) ->
+            case string.ends_with(req.path, "/") {
+              True -> serve(req, config, index, "no-cache")
+              False -> slash(req)
+            }
+          _, _ ->
+            case config.fallback, wants_html(req) {
+              Some(file), True ->
+                serve(req, config, config.directory <> "/" <> file, "no-cache")
+              _, _ -> reply.not_found()
+            }
+        }
+      }
     }
+  }
+}
+
+/// The directory's `index.html`, when it has one and indexes are on.
+fn indexed(config: Config, path: String) -> Result(String, Nil) {
+  let index = path <> "/index.html"
+  case config.index, file_info(index) {
+    True, Ok(_) -> Ok(index)
+    _, _ -> Error(Nil)
+  }
+}
+
+/// A permanent redirect to the same path with a trailing slash.
+fn slash(req: Request) -> Response {
+  let location = case req.query {
+    Some(query) -> req.path <> "/?" <> query
+    None -> req.path <> "/"
+  }
+  reply.empty(301) |> response.set_header("location", location)
+}
+
+/// Whether the request is a page load rather than a fetch for an asset.
+fn wants_html(req: Request) -> Bool {
+  case request.get_header(req, "accept") {
+    Ok(accept) -> string.contains(accept, "text/html")
+    Error(Nil) -> False
   }
 }
 
@@ -99,7 +180,12 @@ pub fn priv(name: String) -> Result(String, Nil) {
   priv_dir(name)
 }
 
-fn serve(req: Request, config: Config, path: String) -> Response {
+fn serve(
+  req: Request,
+  config: Config,
+  path: String,
+  cache_control: String,
+) -> Response {
   let #(file_path, encoding) = variant(req, config, path)
   let media_type = content_type(path)
   case file_info(file_path) {
@@ -121,7 +207,10 @@ fn serve(req: Request, config: Config, path: String) -> Response {
         |> response.set_body(reply.File(path: file_path, offset:, length:))
         |> response.set_header("content-type", media_type)
       }
-      case fresh(req, etag), wanted_range(req, etag, last_modified, size) {
+      case
+        negotiate.none_match(request.get_header(req, "if-none-match"), etag),
+        wanted_range(req, etag, last_modified, size)
+      {
         True, _ -> reply.empty(304)
         False, Whole -> file(200, 0, size)
         False, Part(first, last) ->
@@ -146,7 +235,7 @@ fn serve(req: Request, config: Config, path: String) -> Response {
       |> response.set_header("etag", etag)
       |> response.set_header("last-modified", last_modified)
       |> response.set_header("accept-ranges", "bytes")
-      |> response.set_header("cache-control", config.cache_control)
+      |> response.set_header("cache-control", cache_control)
       |> encoded(encoding, config.precompressed)
     }
     Error(Nil) -> reply.not_found()
@@ -192,24 +281,6 @@ fn encoded(
   case precompressed {
     True -> response.set_header(res, "vary", "accept-encoding")
     False -> res
-  }
-}
-
-/// Whether the client's cached copy, named by `if-none-match`, is current.
-/// A weak comparison: `W/` prefixes are ignored.
-fn fresh(req: Request, etag: String) -> Bool {
-  case request.get_header(req, "if-none-match") {
-    Ok(header) ->
-      header
-      |> string.split(",")
-      |> list.map(fn(tag) {
-        case string.trim(tag) {
-          "W/" <> tag -> tag
-          tag -> tag
-        }
-      })
-      |> list.any(fn(tag) { tag == etag || tag == "*" })
-    Error(Nil) -> False
   }
 }
 
@@ -362,8 +433,8 @@ fn random_boundary() -> String {
   |> string.lowercase
 }
 
-/// The wildcard's value as a relative path, or `Error` if it could leave
-/// the directory or names a dotfile.
+/// The wildcard's value as a relative path (`""` for the directory itself),
+/// or `Error` if it could leave the directory or names a dotfile.
 fn safe_path(path: String) -> Result(String, Nil) {
   let segments = string.split(path, "/") |> list.filter(fn(s) { s != "" })
   let unsafe =
@@ -372,9 +443,9 @@ fn safe_path(path: String) -> Result(String, Nil) {
       || string.contains(segment, "\\")
       || string.contains(segment, "\u{0}")
     })
-  case segments, unsafe {
-    [], _ | _, True -> Error(Nil)
-    _, False -> Ok(string.join(segments, "/"))
+  case unsafe {
+    True -> Error(Nil)
+    False -> Ok(string.join(segments, "/"))
   }
 }
 
