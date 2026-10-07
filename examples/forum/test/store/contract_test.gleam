@@ -8,8 +8,8 @@ import gloss/sql
 import gloss/store
 import gloss/tracer
 import infra/db
-import infra/db/threads
-import infra/db/users
+import store/thread_store as postgres_threads
+import store/user_store as postgres_users
 import support/memory_threads
 import support/memory_users
 import support/store_contract as contract
@@ -24,14 +24,14 @@ pub fn memory_threads_test() {
 
 pub fn postgres_users_test() {
   use db <- with_database
-  let assert Ok(users) = users.new(db) |> store.start
+  let assert Ok(users) = postgres_users.new(db) |> store.start
   contract.users(users)
 }
 
 pub fn postgres_threads_test() {
   use db <- with_database
-  let assert Ok(users) = users.new(db) |> store.start
-  let assert Ok(threads) = threads.new(db) |> store.start
+  let assert Ok(users) = postgres_users.new(db) |> store.start
+  let assert Ok(threads) = postgres_threads.new(db) |> store.start
   // Posts reference real users.
   let author = user(users, "author@x")
   let other = user(users, "other@x")

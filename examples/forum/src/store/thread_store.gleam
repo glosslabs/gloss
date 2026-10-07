@@ -6,32 +6,30 @@ import domain/forum/thread_store.{
 }
 import gleam/dict
 import gleam/dynamic/decode
-import gleam/erlang/process
 import gleam/list
 import gleam/option.{type Option, None}
 import gleam/result
 import gleam/time/timestamp.{type Timestamp}
 import gloss/sql
-import gloss/store.{type Reply}
+import gloss/store
 
 /// The store, ready to `store.start` or `store.supervised`. Each message is
 /// answered in a process of its own, so statements run in parallel on the
 /// pool's connections.
 pub fn new(db: sql.Db) -> store.Builder(Message) {
-  store.concurrent(db, answer)
-}
-
-fn answer(db: sql.Db, message: Message) -> Nil {
-  case message {
-    Open(thread:, reply:) -> respond(open(db, thread), reply)
-    AddPost(post:, reply:) -> respond(add_post(db, post), reply)
-    Get(id:, reply:) -> respond(get(db, id), reply)
-    Recent(offset:, limit:, reply:) -> respond(recent(db, offset, limit), reply)
-  }
+  store.concurrent(fn(message) {
+    case message {
+      Open(thread:, reply:) -> open(db, thread) |> store.reply(reply)
+      AddPost(post:, reply:) -> add_post(db, post) |> store.reply(reply)
+      Get(id:, reply:) -> get(db, id) |> store.reply(reply)
+      Recent(offset:, limit:, reply:) ->
+        recent(db, offset, limit) |> store.reply(reply)
+    }
+  })
 }
 
 fn open(db: sql.Db, new: NewThread) -> Result(Thread, sql.Error) {
-  let created =
+  use id <- result.try(
     sql.transaction(db, fn(tx) {
       use id <- result.try(
         sql.query(
@@ -44,12 +42,12 @@ fn open(db: sql.Db, new: NewThread) -> Result(Thread, sql.Error) {
         |> sql.label("threads.open")
         |> sql.one(tx, _),
       )
-      use _ <- result.try(insert_post(tx, id, new.author_id, new.body, new.at))
-      Ok(id)
+      use _ <- result.map(insert_post(tx, id, new.author_id, new.body, new.at))
+      id
     })
-  use id <- result.try(transaction_error(created))
-  use thread <- result.try(get(db, id))
-  option.to_result(thread, sql.NotFound)
+    |> sql.flatten,
+  )
+  get(db, id) |> result.try(option.to_result(_, sql.NotFound))
 }
 
 fn add_post(db: sql.Db, new: NewPost) -> Result(Option(Thread), sql.Error) {
@@ -69,7 +67,7 @@ fn add_post(db: sql.Db, new: NewPost) -> Result(Option(Thread), sql.Error) {
           |> result.replace(True)
       }
     })
-  case transaction_error(added) {
+  case sql.flatten(added) {
     Ok(True) -> get(db, new.thread_id)
     Ok(False) -> Ok(None)
     Error(error) -> Error(error)
@@ -95,13 +93,11 @@ fn insert_post(
 }
 
 fn get(db: sql.Db, id: Int) -> Result(Option(Thread), sql.Error) {
-  use threads <- result.map(
-    select_threads("where id = $1")
-    |> sql.bind(sql.Int(id))
-    |> sql.label("threads.get")
-    |> with_posts(db, _),
-  )
-  list.first(threads) |> option.from_result
+  select_threads("where id = $1")
+  |> sql.bind(sql.Int(id))
+  |> sql.label("threads.get")
+  |> with_posts(db, _)
+  |> result.map(fn(threads) { list.first(threads) |> option.from_result })
 }
 
 fn recent(
@@ -142,9 +138,9 @@ fn with_posts(
     _ ->
       sql.query(
         "select thread_id, id, author_id, body, at
-        from posts
-        where thread_id = any($1)
-        order by id",
+         from posts
+         where thread_id = any($1)
+         order by id",
       )
       |> sql.bind(sql.Array(list.map(rows, fn(row) { sql.Int(row.id) })))
       |> sql.returning({
@@ -172,18 +168,4 @@ fn with_posts(
       last_activity: row.last_activity,
     )
   })
-}
-
-fn transaction_error(
-  result: Result(a, sql.TransactionError(sql.Error)),
-) -> Result(a, sql.Error) {
-  case result {
-    Ok(value) -> Ok(value)
-    Error(sql.RolledBack(error)) | Error(sql.TransactionFailed(error)) ->
-      Error(error)
-  }
-}
-
-fn respond(result: Result(a, sql.Error), reply: Reply(a)) -> Nil {
-  process.send(reply, store.from_sql(result))
 }

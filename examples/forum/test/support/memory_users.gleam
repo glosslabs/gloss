@@ -6,7 +6,6 @@ import domain/accounts/user_store.{
   Insert, Inserted, Save,
 }
 import gleam/dict.{type Dict}
-import gleam/erlang/process
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gloss/store
@@ -26,7 +25,7 @@ fn answer(state: State, message: Message) -> State {
     Insert(user: new, reply:) ->
       case find(state, new.email) {
         Some(_) -> {
-          process.send(reply, Ok(DuplicateEmail))
+          store.reply(Ok(DuplicateEmail), reply)
           state
         }
         None -> {
@@ -40,7 +39,7 @@ fn answer(state: State, message: Message) -> State {
               password_hash: new.password_hash,
               joined_at: new.joined_at,
             )
-          process.send(reply, Ok(Inserted(created)))
+          store.reply(Ok(Inserted(created)), reply)
           State(
             next_id: state.next_id + 1,
             users: dict.insert(state.users, created.id, created),
@@ -48,19 +47,19 @@ fn answer(state: State, message: Message) -> State {
         }
       }
     Get(id:, reply:) -> {
-      process.send(reply, Ok(dict.get(state.users, id) |> option.from_result))
+      store.reply(Ok(dict.get(state.users, id) |> option.from_result), reply)
       state
     }
     GetMany(ids:, reply:) -> {
-      process.send(reply, Ok(list.filter_map(ids, dict.get(state.users, _))))
+      store.reply(Ok(list.filter_map(ids, dict.get(state.users, _))), reply)
       state
     }
     FindByEmail(email:, reply:) -> {
-      process.send(reply, Ok(find(state, email)))
+      store.reply(Ok(find(state, email)), reply)
       state
     }
     Save(user:, reply:) -> {
-      process.send(reply, Ok(Nil))
+      store.reply(Ok(Nil), reply)
       State(..state, users: dict.insert(state.users, user.id, user))
     }
   }

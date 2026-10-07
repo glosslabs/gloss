@@ -1,5 +1,5 @@
 //// What every user and thread store must do, whichever storage answers
-//// it. `test/infra/store_test.gleam` runs these against the
+//// it. `test/store/contract_test.gleam` runs these against the
 //// in-memory adapters and, when a database is available, against Postgres.
 
 import domain/accounts/user.{User}

@@ -5,7 +5,6 @@ import domain/forum/thread_store.{
   type Message, type ThreadStore, AddPost, Get, Open, Recent,
 }
 import gleam/dict.{type Dict}
-import gleam/erlang/process
 import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
@@ -44,7 +43,7 @@ fn answer(state: State, message: Message) -> State {
           posts: [post],
           last_activity: new.at,
         )
-      process.send(reply, Ok(created))
+      store.reply(Ok(created), reply)
       State(
         next_thread: state.next_thread + 1,
         next_post: state.next_post + 1,
@@ -54,7 +53,7 @@ fn answer(state: State, message: Message) -> State {
     AddPost(post: new, reply:) ->
       case dict.get(state.threads, new.thread_id) {
         Error(Nil) -> {
-          process.send(reply, Ok(None))
+          store.reply(Ok(None), reply)
           state
         }
         Ok(found) -> {
@@ -71,7 +70,7 @@ fn answer(state: State, message: Message) -> State {
               posts: list.append(found.posts, [post]),
               last_activity: new.at,
             )
-          process.send(reply, Ok(Some(updated)))
+          store.reply(Ok(Some(updated)), reply)
           State(
             ..state,
             next_post: state.next_post + 1,
@@ -80,7 +79,7 @@ fn answer(state: State, message: Message) -> State {
         }
       }
     Get(id:, reply:) -> {
-      process.send(reply, Ok(dict.get(state.threads, id) |> option.from_result))
+      store.reply(Ok(dict.get(state.threads, id) |> option.from_result), reply)
       state
     }
     Recent(offset:, limit:, reply:) -> {
@@ -92,7 +91,7 @@ fn answer(state: State, message: Message) -> State {
         })
         |> list.drop(offset)
         |> list.take(limit)
-      process.send(reply, Ok(threads))
+      store.reply(Ok(threads), reply)
       state
     }
   }
