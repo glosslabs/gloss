@@ -95,6 +95,7 @@ pub opaque type Builder(state) {
     request_timeout: Option(Duration),
     shutdown_timeout: Duration,
     acceptors: Int,
+    max_connections: Option(Int),
     trusted_proxies: List(forwarded.Cidr),
     on_started: List(fn(Started) -> Nil),
     on_stopped: List(fn(Stopped) -> Nil),
@@ -158,6 +159,7 @@ pub fn new(router: Router(state), state: state) -> Builder(state) {
     request_timeout: Some(duration.seconds(30)),
     shutdown_timeout: duration.seconds(10),
     acceptors: 10,
+    max_connections: Some(10_000),
     trusted_proxies: [],
     on_started: [],
     on_stopped: [],
@@ -273,6 +275,19 @@ pub fn trust_proxies(
     ..builder,
     trusted_proxies: list.append(builder.trusted_proxies, trusted),
   )
+}
+
+/// The most connections open at once. At the cap the server stops
+/// accepting: new clients wait in the operating system's listen backlog
+/// and are served as connections close, and a `connections.saturated`
+/// warning point is traced each time the cap is reached. `None` accepts
+/// without limit, up to the process and file-descriptor limits. Default
+/// `Some(10_000)`.
+pub fn max_connections(
+  builder: Builder(state),
+  max: Option(Int),
+) -> Builder(state) {
+  Builder(..builder, max_connections: max)
 }
 
 /// How many processes accept connections concurrently.
@@ -396,6 +411,16 @@ fn start_control(
           name: "accept.failed",
           level: tracer.Error,
           meta: fn() { [#("reason", meta.String(reason))] },
+        )
+      },
+      max_connections: builder.max_connections,
+      on_saturated: fn(max) {
+        tracer.point(
+          builder.tracer,
+          source:,
+          name: "connections.saturated",
+          level: tracer.Warning,
+          meta: fn() { [#("max_connections", meta.Int(max))] },
         )
       },
     )

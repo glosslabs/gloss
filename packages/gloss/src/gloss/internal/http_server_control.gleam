@@ -10,6 +10,7 @@
 
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Monitor, type Pid, type Subject}
+import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
@@ -28,6 +29,11 @@ pub type Config {
     /// Reported when the accept loop hits an error other than the listen
     /// socket closing.
     on_accept_error: fn(String) -> Nil,
+    /// The most connections open at once; `None` for no limit. At the cap
+    /// acceptors wait, leaving new clients in the listen backlog.
+    max_connections: Option(Int),
+    /// Called each time the cap is reached.
+    on_saturated: fn(Int) -> Nil,
   )
 }
 
@@ -38,7 +44,13 @@ pub type StartError {
 }
 
 pub opaque type Message {
-  Accepted(Pid)
+  /// An acceptor asks for a slot before accepting; the reply comes once
+  /// the server has room.
+  Reserve(granted: Subject(Nil))
+  /// A reserved slot was used by this connection.
+  Accepted(pid: Pid)
+  /// A reserved slot went unused.
+  Released
   ConnectionDown(Pid)
   Shutdown(reply: Subject(Result(Nil, Int)))
   DrainDeadline
@@ -58,6 +70,12 @@ type State {
     connections: Dict(Pid, Monitor),
     shutdown_timeout: Int,
     draining: Option(Drain),
+    max_connections: Option(Int),
+    on_saturated: fn(Int) -> Nil,
+    /// Slots granted to acceptors that haven't accepted yet.
+    reserved: Int,
+    /// Acceptors held back by the cap, oldest first.
+    waiting: List(Subject(Nil)),
   )
 }
 
@@ -102,6 +120,10 @@ pub fn start(
           connections: dict.new(),
           shutdown_timeout: config.shutdown_timeout,
           draining: None,
+          max_connections: config.max_connections,
+          on_saturated: config.on_saturated,
+          reserved: 0,
+          waiting: [],
         )
         |> actor.initialised
         |> actor.selecting(selector)
@@ -148,23 +170,54 @@ fn describe(error: StartError) -> String {
 
 fn on_message(state: State, message: Message) -> actor.Next(State, Message) {
   case message {
-    Accepted(pid) -> {
+    Reserve(granted:) ->
+      case state.draining, full(state) {
+        // While draining, release at once: the acceptor finds the listener
+        // closed and exits.
+        Some(_), _ -> {
+          process.send(granted, Nil)
+          actor.continue(state)
+        }
+        // Hold the acceptor until a connection closes.
+        None, True ->
+          actor.continue(
+            State(..state, waiting: list.append(state.waiting, [granted])),
+          )
+        None, False -> {
+          process.send(granted, Nil)
+          actor.continue(State(..state, reserved: state.reserved + 1))
+        }
+      }
+
+    Accepted(pid:) -> {
       let monitor = process.monitor(pid)
       case state.draining {
         Some(_) -> tcp.request_drain(pid)
         None -> Nil
       }
       tcp.go(pid)
-      actor.continue(
+      let state =
         State(
           ..state,
+          reserved: int.max(state.reserved - 1, 0),
           connections: dict.insert(state.connections, pid, monitor),
-        ),
-      )
+        )
+      let open = dict.size(state.connections)
+      case state.max_connections {
+        Some(max) if max == open -> state.on_saturated(max)
+        _ -> Nil
+      }
+      actor.continue(state)
     }
+
+    Released ->
+      State(..state, reserved: int.max(state.reserved - 1, 0))
+      |> release_waiting
+      |> actor.continue
 
     ConnectionDown(pid) ->
       State(..state, connections: dict.delete(state.connections, pid))
+      |> release_waiting
       |> finish_if_drained
 
     Shutdown(reply:) ->
@@ -189,12 +242,34 @@ fn on_message(state: State, message: Message) -> actor.Next(State, Message) {
   }
 }
 
+/// Whether every slot is taken by an open connection or a reservation.
+fn full(state: State) -> Bool {
+  case state.max_connections {
+    Some(max) -> dict.size(state.connections) + state.reserved >= max
+    None -> False
+  }
+}
+
+/// Grant a held acceptor a slot, now that there is room.
+fn release_waiting(state: State) -> State {
+  case state.waiting, full(state) {
+    [granted, ..rest], False -> {
+      process.send(granted, Nil)
+      State(..state, waiting: rest, reserved: state.reserved + 1)
+    }
+    _, _ -> state
+  }
+}
+
 fn begin_drain(state: State, drain: Drain) -> actor.Next(State, Message) {
   case state.draining {
     // Already draining: the first request decides how we stop.
     Some(_) -> actor.continue(state)
     None -> {
       tcp.close_listener(state.listener)
+      // Held acceptors find the listener closed and exit.
+      list.each(state.waiting, process.send(_, Nil))
+      let state = State(..state, waiting: [])
       dict.keys(state.connections) |> list.each(tcp.request_drain)
       process.send_after(state.self, state.shutdown_timeout, DrainDeadline)
       State(..state, draining: Some(drain)) |> finish_if_drained
@@ -227,6 +302,11 @@ fn accept_loop(
   control: Subject(Message),
   config: Config,
 ) {
+  // Wait for a free slot before accepting, so the cap holds however many
+  // acceptors there are.
+  let granted = process.new_subject()
+  process.send(control, Reserve(granted:))
+  process.receive_forever(granted)
   case tcp.accept(listener) {
     Ok(socket) -> {
       let serve = config.serve
@@ -237,13 +317,15 @@ fn accept_loop(
         })
       tcp.controlling_process(socket, pid)
       // The control process monitors the connection, then lets it start.
-      process.send(control, Accepted(pid))
+      process.send(control, Accepted(pid:))
       accept_loop(listener, control, config)
     }
     Error(tcp.Closed) -> Nil
     Error(tcp.Failed(reason)) -> {
       config.on_accept_error(reason)
-      // Back off briefly, e.g. when out of file descriptors.
+      // Give the slot back, and back off briefly, e.g. when out of file
+      // descriptors.
+      process.send(control, Released)
       process.sleep(10)
       accept_loop(listener, control, config)
     }
