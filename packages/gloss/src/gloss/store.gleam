@@ -1,5 +1,5 @@
-//// Stores: processes that answer storage messages, so the rules of an
-//// application can be kept apart from how its data is stored.
+//// Stores: what answers an application's storage messages, so its rules
+//// can be kept apart from how its data is stored.
 ////
 //// The application's core defines a store's messages, each carrying a
 //// `Reply` for its answer, and sends them with `call`. An adapter answers
@@ -18,34 +18,31 @@
 //// }
 ////
 //// // In an adapter: answering from Postgres.
-//// store.concurrent(fn(message) {
+//// store.inline(fn(message) {
 ////   case message {
 ////     Get(id:, reply:) -> sql.optional(db, select(id)) |> store.reply(reply)
 ////     Save(user:, reply:) -> sql.exec(db, update(user)) |> store.reply(reply)
 ////   }
 //// })
-//// |> store.start
 //// ```
 ////
-//// ## Concurrent and serial stores
+//// ## Inline and serial stores
 ////
-//// `concurrent` answers each message in a process of its own, so a slow
-//// statement never holds up the next; the answering function captures
-//// what it needs, such as a `sql.Db`. `serial` answers one message at a time and keeps state
-//// between them, which suits a store held in memory.
+//// An `inline` store answers in the calling process, with no process of its
+//// own: nothing is copied between processes and nothing needs starting. It
+//// suits a store over a database, whose pool already runs statements
+//// concurrently; the answering function captures what it needs, such as a
+//// `sql.Db`. A `serial` store is a process that answers one message at a
+//// time and keeps state between them, which suits a store held in memory.
 ////
 //// ## Failure
 ////
 //// Storage failing (the database being down) is rarely something the
 //// caller can act on, so it is not part of a message's answer type: an
 //// adapter's `sql.Error` is answered as `Unavailable(reason)` and `call`
-//// panics with the reason. In a request handler that becomes a 500 that is logged and
-//// traced. Business outcomes, such as an email already being taken, belong
-//// in the answer itself.
-////
-//// An adapter that panics while answering sends no reply, and the caller
-//// waits the full `call` timeout before panicking itself, so adapters
-//// should answer `Unavailable` rather than panic.
+//// panics with the reason. In a request handler that becomes a 500 that is
+//// logged and traced. Business outcomes, such as an email already being
+//// taken, belong in the answer itself.
 
 import gleam/erlang/process.{type Name, type Subject}
 import gleam/option.{type Option, None, Some}
@@ -54,9 +51,12 @@ import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import gloss/sql
 
-/// A running store that answers `message`s.
+/// Something that answers `message`s.
 pub opaque type Store(message) {
-  Store(subject: Subject(message))
+  /// A process.
+  Running(subject: Subject(message))
+  /// A function run in the caller's process.
+  Inline(answer: fn(message) -> Nil)
 }
 
 /// Storage could not answer, e.g. because the database is down.
@@ -68,8 +68,8 @@ pub type Unavailable {
 pub type Reply(a) =
   Subject(Result(a, Unavailable))
 
-/// How to run a store. Make one with `concurrent` or `serial`, then
-/// `start` or `supervised` it.
+/// How to run a store process. Make one with `serial`, then `start` or
+/// `supervised` it.
 pub opaque type Builder(message) {
   Builder(
     start: fn(Option(Name(message))) ->
@@ -78,17 +78,10 @@ pub opaque type Builder(message) {
   )
 }
 
-/// A store that answers each message in a new process.
-pub fn concurrent(answer: fn(message) -> Nil) -> Builder(message) {
-  Builder(name: None, start: fn(name) {
-    actor.new(Nil)
-    |> actor.on_message(fn(_, message) {
-      process.spawn_unlinked(fn() { answer(message) })
-      actor.continue(Nil)
-    })
-    |> register(name)
-    |> actor.start
-  })
+/// A store that answers each message in the calling process, by running
+/// `answer` there. It has no process, so there is nothing to start.
+pub fn inline(answer: fn(message) -> Nil) -> Store(message) {
+  Inline(answer)
 }
 
 /// A store that answers one message at a time, starting from `state` and
@@ -121,7 +114,7 @@ pub fn start(
   builder: Builder(message),
 ) -> Result(Store(message), actor.StartError) {
   builder.start(builder.name)
-  |> result.map(fn(started) { Store(started.data) })
+  |> result.map(fn(started) { Running(started.data) })
 }
 
 /// A child for a supervision tree. Pair it with `named` and `from_name` to
@@ -132,24 +125,38 @@ pub fn supervised(
   supervision.worker(fn() {
     builder.start(builder.name)
     |> result.map(fn(started) {
-      actor.Started(..started, data: Store(started.data))
+      actor.Started(..started, data: Running(started.data))
     })
   })
 }
 
 /// The store registered under `name`. Usable before it starts.
 pub fn from_name(name: Name(message)) -> Store(message) {
-  Store(process.named_subject(name))
+  Running(process.named_subject(name))
 }
 
 /// Send a message and wait up to ten seconds for its answer. Panics if the
-/// store answers `Unavailable`, doesn't answer in time, or isn't running.
+/// store answers `Unavailable` or doesn't answer in time, or if a store
+/// process isn't running.
 pub fn call(store: Store(message), make: fn(Reply(a)) -> message) -> a {
-  case process.call(store.subject, 10_000, make) {
+  let answer = case store {
+    Running(subject) -> process.call(subject, timeout, make)
+    Inline(answer) -> {
+      let reply = process.new_subject()
+      answer(make(reply))
+      case process.receive(reply, timeout) {
+        Ok(answer) -> answer
+        Error(Nil) -> panic as "store did not answer"
+      }
+    }
+  }
+  case answer {
     Ok(answer) -> answer
     Error(Unavailable(reason)) -> panic as { "store unavailable: " <> reason }
   }
 }
+
+const timeout = 10_000
 
 /// Answer a message. A database error becomes `Unavailable`, so map the
 /// errors that are business outcomes, such as a `sql.UniqueViolation`,

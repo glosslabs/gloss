@@ -31,8 +31,9 @@ fn counter() -> store.Builder(Message) {
   })
 }
 
-fn sleeper() -> store.Builder(Message) {
-  store.concurrent(fn(message) {
+/// Answers in whichever process runs it, reporting that process's pid.
+fn inline() -> store.Store(Message) {
+  store.inline(fn(message) {
     case message {
       Slow(ms:, reply:) -> {
         process.sleep(ms)
@@ -50,16 +51,50 @@ pub fn a_serial_store_keeps_state_test() {
   assert store.call(counter, Add(3, _)) == 5
 }
 
-pub fn a_concurrent_store_answers_messages_in_parallel_test() {
-  let assert Ok(sleeper) = store.start(sleeper())
+pub fn an_inline_store_answers_in_the_calling_process_test() {
+  let answered_by = process.new_subject()
+  let here =
+    store.inline(fn(message) {
+      case message {
+        Add(amount:, reply:) -> {
+          process.send(answered_by, process.self())
+          process.send(reply, Ok(amount))
+        }
+        _ -> Nil
+      }
+    })
+  assert store.call(here, Add(3, _)) == 3
+  assert process.receive(answered_by, 0) == Ok(process.self())
+}
+
+pub fn an_inline_store_runs_concurrently_for_concurrent_callers_test() {
+  let inline = inline()
   let done = process.new_subject()
   let started = monotonic_ms()
-  process.spawn(fn() { process.send(done, store.call(sleeper, Slow(200, _))) })
-  process.spawn(fn() { process.send(done, store.call(sleeper, Slow(200, _))) })
+  process.spawn(fn() { process.send(done, store.call(inline, Slow(200, _))) })
+  process.spawn(fn() { process.send(done, store.call(inline, Slow(200, _))) })
   let assert Ok(Nil) = process.receive(done, 1000)
   let assert Ok(Nil) = process.receive(done, 1000)
   // One after the other would take 400ms.
   assert monotonic_ms() - started < 350
+}
+
+pub fn an_inline_store_may_answer_from_another_process_test() {
+  let forwarding =
+    store.inline(fn(message) {
+      process.spawn(fn() {
+        case message {
+          Add(amount:, reply:) -> process.send(reply, Ok(amount * 2))
+          _ -> Nil
+        }
+      })
+      Nil
+    })
+  assert store.call(forwarding, Add(5, _)) == 10
+}
+
+pub fn unavailable_inline_storage_panics_the_caller_test() {
+  let assert Error(_) = rescue(fn() { store.call(inline(), Fail) })
 }
 
 pub fn unavailable_storage_panics_the_caller_test() {
