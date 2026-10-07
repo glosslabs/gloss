@@ -1,5 +1,6 @@
 import app/config
 import app/db
+import app/debug
 import app/logging
 import app/otel
 import app/sentry
@@ -24,12 +25,14 @@ pub fn main() -> Nil {
   let log = logging.default(config)
   let sentry = sentry.start(config)
   let otel = otel.start(config)
+  let bar = debug.start(config)
 
   let tracer =
     tracer.new()
     |> tracing.with_logger(log)
     |> tracing.with_sentry(sentry)
     |> tracing.with_otel(otel)
+    |> tracing.with_debug_bar(bar)
 
   let assert Ok(db) = db.start(config.database_url, tracer)
   let users = users.new(db)
@@ -42,13 +45,11 @@ pub fn main() -> Nil {
       avatars_dir: config.data_dir <> "/avatars",
     )
 
+  let logger = tracing.handler_logger(log, otel:, debug_bar: bar)
   let assert Ok(srv) =
-    server.start_with(
-      config:,
-      state:,
-      logger: tracing.handler_logger(log, otel),
-      tracer:,
-    )
+    server.builder(config:, state:, logger:, tracer:)
+    |> debug.with_panel(bar)
+    |> http_server.start
 
   signal.wait_for_terminate()
 

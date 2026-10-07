@@ -9,7 +9,7 @@ gleam-lang packages.
 | `gloss/http/*` | HTTP/1.1 server, router, request context, replies and body decoding |
 | `gloss/store` | Stores: processes that answer an application's storage messages, concurrently (a database) or one at a time (memory) |
 | `gloss/sql` | Statements, row decoding, transactions and a connection pool, shared by every database driver |
-| `gloss/tracer` | Spans and points, delivered to handlers you attach |
+| `gloss/tracer` | Spans and points, delivered to handlers you attach; a per-process current span (`current`, `with_current`) that requests set so their queries join their trace |
 | `gloss/logger` | Structured logging with channels (`stdout`, `stderr`, `otp`, `memory`, …), `min_level`/`max_level` to split them |
 | `gloss/logger/file` | A log channel that appends to a file and rotates it by size |
 | `gloss/meta` | Key/value metadata shared by the tracer and logger |
@@ -91,6 +91,7 @@ larger apps can give separate route groups their own state.
 | `gloss/http/session` | Server-side sessions: `load`, `get`/`set`/`remove`, `save`, `regenerate`, `destroy`, over a pluggable `Store` |
 | `gloss/http/session/memory` | The default store: an ETS table swept of expired sessions every minute |
 | `gloss/http/csrf` | Cross-site request forgery protection from `Sec-Fetch-Site` and `Origin`, with no tokens |
+| `gloss/http/debug_bar` | Development panel on HTML pages: the request's timeline, queries, logs, and recent requests (`start`, `handler`, `logger`, `middleware`) |
 | `gloss/http/static` | Files from a directory via `sendfile`, with content types, ETag revalidation, byte ranges (including multipart) for media, pre-compressed `.br`/`.gz` copies, `cache-control`, directory indexes and a single-page-app fallback |
 | `gloss/http/sse` | Server-sent events over a streamed response |
 | `gloss/http/compress` | gzip middleware for JSON, text and streamed responses, by `accept-encoding` |
