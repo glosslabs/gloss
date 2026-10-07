@@ -7,6 +7,7 @@ gleam-lang packages.
 | Module | |
 |---|---|
 | `gloss/http/*` | HTTP/1.1 server, router, request context, replies and body decoding |
+| `gloss/store` | Stores: processes that answer an application's storage messages, concurrently (a database) or one at a time (memory) |
 | `gloss/sql` | Statements, row decoding, transactions and a connection pool, shared by every database driver |
 | `gloss/tracer` | Spans and points, delivered to handlers you attach |
 | `gloss/logger` | Structured logging with channels (`stdout`, `stderr`, `otp`, `memory`, …), `min_level`/`max_level` to split them |

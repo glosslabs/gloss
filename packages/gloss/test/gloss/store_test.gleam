@@ -1,0 +1,95 @@
+import gleam/erlang/atom
+import gleam/erlang/process
+import gleam/otp/static_supervisor as supervisor
+import gloss/sql
+import gloss/store.{type Reply, Unavailable}
+
+type Message {
+  Add(amount: Int, reply: Reply(Int))
+  Slow(ms: Int, reply: Reply(Nil))
+  Fail(reply: Reply(Nil))
+}
+
+fn counter() -> store.Builder(Message) {
+  store.serial(0, fn(total, message) {
+    case message {
+      Add(amount:, reply:) -> {
+        let total = total + amount
+        process.send(reply, Ok(total))
+        total
+      }
+      Slow(ms:, reply:) -> {
+        process.sleep(ms)
+        process.send(reply, Ok(Nil))
+        total
+      }
+      Fail(reply:) -> {
+        process.send(reply, Error(Unavailable("disk on fire")))
+        total
+      }
+    }
+  })
+}
+
+fn sleeper() -> store.Builder(Message) {
+  store.concurrent(Nil, fn(_, message) {
+    case message {
+      Slow(ms:, reply:) -> {
+        process.sleep(ms)
+        process.send(reply, Ok(Nil))
+      }
+      Add(amount:, reply:) -> process.send(reply, Ok(amount))
+      Fail(reply:) -> process.send(reply, Error(Unavailable("down")))
+    }
+  })
+}
+
+pub fn a_serial_store_keeps_state_test() {
+  let assert Ok(counter) = store.start(counter())
+  assert store.call(counter, Add(2, _)) == 2
+  assert store.call(counter, Add(3, _)) == 5
+}
+
+pub fn a_concurrent_store_answers_messages_in_parallel_test() {
+  let assert Ok(sleeper) = store.start(sleeper())
+  let done = process.new_subject()
+  let started = monotonic_ms()
+  process.spawn(fn() { process.send(done, store.call(sleeper, Slow(200, _))) })
+  process.spawn(fn() { process.send(done, store.call(sleeper, Slow(200, _))) })
+  let assert Ok(Nil) = process.receive(done, 1000)
+  let assert Ok(Nil) = process.receive(done, 1000)
+  // One after the other would take 400ms.
+  assert monotonic_ms() - started < 350
+}
+
+pub fn unavailable_storage_panics_the_caller_test() {
+  let assert Ok(counter) = store.start(counter())
+  let assert Error(_) = rescue(fn() { store.call(counter, Fail) })
+  // The store itself carries on.
+  assert store.call(counter, Add(1, _)) == 1
+}
+
+pub fn a_named_store_is_reachable_from_its_name_test() {
+  let name = process.new_name("store_test")
+  let assert Ok(_) =
+    supervisor.new(supervisor.OneForOne)
+    |> supervisor.add(counter() |> store.named(name) |> store.supervised)
+    |> supervisor.start
+  assert store.call(store.from_name(name), Add(4, _)) == 4
+}
+
+pub fn sql_errors_become_unavailable_test() {
+  assert store.from_sql(Ok(1)) == Ok(1)
+  assert store.from_sql(Error(sql.PoolTimeout))
+    == Error(Unavailable("timed out waiting for a connection"))
+}
+
+@external(erlang, "gloss@sql_ffi", "rescue")
+fn rescue(work: fn() -> a) -> Result(a, b)
+
+fn monotonic_ms() -> Int {
+  monotonic_time(atom.create("millisecond"))
+}
+
+@external(erlang, "erlang", "monotonic_time")
+fn monotonic_time(unit: atom.Atom) -> Int
