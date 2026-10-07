@@ -36,11 +36,10 @@ they are composed.
 | `app/logging`, `app/tracing` | Where log entries go (console and rotated files); where trace events go (the log and Sentry) |
 | `domain/accounts` | Registration, sign-in, profiles and avatars |
 | `domain/accounts/user` | User rules; passwords are hashed with `gloss/password` |
-| `domain/accounts/user_repository` | The port for storing users: the messages a user repository answers |
+| `domain/accounts/user_store` | The port for storing users: the messages a user store answers |
 | `domain/forum` | Threads and replies |
 | `domain/forum/thread` | Thread and post rules |
-| `domain/forum/thread_repository` | The port for storing threads and posts |
-| `domain/repository` | What the ports share: `Unavailable`, and `call` |
+| `domain/forum/thread_store` | The port for storing threads and posts |
 | `server` | The HTTP server: routes, CSRF protection, compression, error pages |
 | `server/state` | What handlers reach through `ctx.state`, including the signed-in user |
 | `server/routing` | The route table, and nothing else |
@@ -48,25 +47,28 @@ they are composed.
 | `server/middleware/current_user` | The signed-in user from the session |
 | `server/views/*` | Lustre views rendered to HTML |
 | `infra/db` | The Postgres connection pool, and the schema it creates at start |
-| `infra/db/users`, `infra/db/threads` | The repositories, answered from Postgres |
+| `infra/db/users`, `infra/db/threads` | The stores, answered from Postgres |
 | `infra/sentry` | The Sentry client, started when `SENTRY_DSN` is set |
 
-### Repositories
+### Domains and stores
 
-Each aggregate has a repository port in the domain: a message type, such as
-`user_repository.Message` (`Insert`, `Get`, `FindByEmail`, `Save`, ...),
-that a repository process answers. The domain services keep the rules
-(validating input, hashing passwords, deciding timestamps) and send
-messages for storage; `infra/db/users` and `infra/db/threads` answer them
-with SQL, each message in a process of its own so statements run in
-parallel on the pool. The tests answer the same messages from memory
-(`test/support/memory_*`), and `test/support/repository_contract` checks
-that both adapters behave the same.
+Each domain (`accounts`, `forum`) stands alone: it imports nothing from
+another domain, and refers to users from the forum only by id.
+
+Each aggregate has a store port in its domain: a message type, such as
+`user_store.Message` (`Insert`, `Get`, `FindByEmail`, `Save`, ...), that a
+store process answers, built on `gloss/store`. The domain services keep the
+rules (validating input, hashing passwords, deciding timestamps) and send
+messages for storage. `infra/db/users` and `infra/db/threads` answer them
+with SQL from a `store.concurrent` store, each message in a process of its
+own so statements run in parallel on the pool. The tests answer the same
+messages from memory with `store.serial` (`test/support/memory_*`), and
+`test/support/store_contract` checks that both behave the same.
 
 Storage failing (the database being down) is not a domain outcome:
-`repository.call` panics, the server answers `500` and the failure reaches
-the log and Sentry. Business outcomes, such as an email being taken, are
-part of each message's answer.
+`store.call` panics, the server answers `500` and the failure reaches the
+log and Sentry. Business outcomes, such as an email being taken, are part of
+each message's answer.
 
 ## What it exercises
 
@@ -86,6 +88,6 @@ part of each message's answer.
 
 `mise run test` runs the domain tests and the server tests, which drive the
 whole app through `server.handle` like a browser keeping its session cookie,
-on the in-memory repositories. Set `TEST_DATABASE_URL` to also run the
-repository contract against Postgres; it empties the tables first, so give
+on the in-memory stores. Set `TEST_DATABASE_URL` to also run the
+store contract against Postgres; it empties the tables first, so give
 it a database of its own.

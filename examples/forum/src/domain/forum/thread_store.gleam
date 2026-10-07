@@ -1,14 +1,13 @@
 //// The port for storing threads and their posts: the messages a thread
-//// repository answers.
+//// store answers.
 
 import domain/forum/thread.{type Thread}
-import domain/repository.{type Reply}
-import gleam/erlang/process.{type Subject}
 import gleam/option.{type Option}
 import gleam/time/timestamp.{type Timestamp}
+import gloss/store.{type Reply, type Store}
 
-pub type ThreadRepository =
-  Subject(Message)
+pub type ThreadStore =
+  Store(Message)
 
 /// A thread not stored yet, with the post that opens it.
 pub type NewThread {
@@ -31,22 +30,18 @@ pub type Message {
   Recent(offset: Int, limit: Int, reply: Reply(List(Thread)))
 }
 
-pub fn open(threads: ThreadRepository, thread: NewThread) -> Thread {
-  repository.call(threads, Open(thread, _))
+pub fn open(threads: ThreadStore, thread: NewThread) -> Thread {
+  store.call(threads, Open(thread, _))
 }
 
-pub fn add_post(threads: ThreadRepository, post: NewPost) -> Option(Thread) {
-  repository.call(threads, AddPost(post, _))
+pub fn add_post(threads: ThreadStore, post: NewPost) -> Option(Thread) {
+  store.call(threads, AddPost(post, _))
 }
 
-pub fn get(threads: ThreadRepository, id: Int) -> Option(Thread) {
-  repository.call(threads, Get(id, _))
+pub fn get(threads: ThreadStore, id: Int) -> Option(Thread) {
+  store.call(threads, Get(id, _))
 }
 
-pub fn recent(
-  threads: ThreadRepository,
-  offset: Int,
-  limit: Int,
-) -> List(Thread) {
-  repository.call(threads, Recent(offset, limit, _))
+pub fn recent(threads: ThreadStore, offset: Int, limit: Int) -> List(Thread) {
+  store.call(threads, Recent(offset, limit, _))
 }

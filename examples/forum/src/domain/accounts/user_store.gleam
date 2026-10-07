@@ -1,13 +1,12 @@
-//// The port for storing users: the messages a user repository answers.
+//// The port for storing users: the messages a user store answers.
 
 import domain/accounts/user.{type User}
-import domain/repository.{type Reply}
-import gleam/erlang/process.{type Subject}
 import gleam/option.{type Option}
 import gleam/time/timestamp.{type Timestamp}
+import gloss/store.{type Reply, type Store}
 
-pub type UserRepository =
-  Subject(Message)
+pub type UserStore =
+  Store(Message)
 
 /// A user not stored yet, so without an id.
 pub type NewUser {
@@ -36,22 +35,22 @@ pub type Message {
   Save(user: User, reply: Reply(Nil))
 }
 
-pub fn insert(users: UserRepository, user: NewUser) -> Insertion {
-  repository.call(users, Insert(user, _))
+pub fn insert(users: UserStore, user: NewUser) -> Insertion {
+  store.call(users, Insert(user, _))
 }
 
-pub fn get(users: UserRepository, id: Int) -> Option(User) {
-  repository.call(users, Get(id, _))
+pub fn get(users: UserStore, id: Int) -> Option(User) {
+  store.call(users, Get(id, _))
 }
 
-pub fn get_many(users: UserRepository, ids: List(Int)) -> List(User) {
-  repository.call(users, GetMany(ids, _))
+pub fn get_many(users: UserStore, ids: List(Int)) -> List(User) {
+  store.call(users, GetMany(ids, _))
 }
 
-pub fn find_by_email(users: UserRepository, email: String) -> Option(User) {
-  repository.call(users, FindByEmail(email, _))
+pub fn find_by_email(users: UserStore, email: String) -> Option(User) {
+  store.call(users, FindByEmail(email, _))
 }
 
-pub fn save(users: UserRepository, user: User) -> Nil {
-  repository.call(users, Save(user, _))
+pub fn save(users: UserStore, user: User) -> Nil {
+  store.call(users, Save(user, _))
 }

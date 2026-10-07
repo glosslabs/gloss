@@ -1,13 +1,13 @@
 //// User accounts: registration, sign-in and profiles.
 ////
 //// The rules live here and in `domain/accounts/user`; storing users is the
-//// `UserRepository`'s job.
+//// `UserStore`'s job.
 
 import domain/accounts/user.{
   type ProfileError, type RegisterError, type User, User,
 }
-import domain/accounts/user_repository.{
-  type UserRepository, DuplicateEmail, Inserted, NewUser,
+import domain/accounts/user_store.{
+  type UserStore, DuplicateEmail, Inserted, NewUser,
 }
 import gleam/dict.{type Dict}
 import gleam/list
@@ -17,10 +17,10 @@ import gleam/time/timestamp
 import gloss/password
 
 pub opaque type Accounts {
-  Accounts(users: UserRepository)
+  Accounts(users: UserStore)
 }
 
-pub fn new(users: UserRepository) -> Accounts {
+pub fn new(users: UserStore) -> Accounts {
   Accounts(users:)
 }
 
@@ -39,7 +39,7 @@ pub fn register(
       password_hash: password.hash(plain),
       joined_at: timestamp.system_time(),
     )
-  case user_repository.insert(accounts.users, new) {
+  case user_store.insert(accounts.users, new) {
     Inserted(user) -> Ok(user)
     DuplicateEmail -> Error(user.EmailTaken)
   }
@@ -52,7 +52,7 @@ pub fn authenticate(
   plain: String,
 ) -> Result(User, Nil) {
   let found = case user.email(email) {
-    Ok(email) -> user_repository.find_by_email(accounts.users, email)
+    Ok(email) -> user_store.find_by_email(accounts.users, email)
     Error(_) -> None
   }
   case found {
@@ -73,12 +73,12 @@ const decoy =
   "pbkdf2-sha256$100000$c2FsdHNhbHRzYWx0c2FsdA$ZGVjb3lkZWNveWRlY295ZGVjb3lkZWNveWRlY295ZGU"
 
 pub fn get(accounts: Accounts, id: Int) -> Result(User, Nil) {
-  user_repository.get(accounts.users, id) |> option.to_result(Nil)
+  user_store.get(accounts.users, id) |> option.to_result(Nil)
 }
 
 /// The users with these ids, by id. Unknown ids are left out.
 pub fn many(accounts: Accounts, ids: List(Int)) -> Dict(Int, User) {
-  user_repository.get_many(accounts.users, list.unique(ids))
+  user_store.get_many(accounts.users, list.unique(ids))
   |> list.map(fn(user) { #(user.id, user) })
   |> dict.from_list
 }
@@ -93,7 +93,7 @@ pub fn update_profile(
   case get(accounts, id) {
     Ok(found) -> {
       let updated = User(..found, display_name:, bio:)
-      user_repository.save(accounts.users, updated)
+      user_store.save(accounts.users, updated)
       Ok(updated)
     }
     // A user that vanished mid-request: nothing to update.
@@ -108,6 +108,6 @@ pub fn set_avatar(
   avatar: String,
 ) -> Result(Option(String), Nil) {
   use found <- result.map(get(accounts, id))
-  user_repository.save(accounts.users, User(..found, avatar: Some(avatar)))
+  user_store.save(accounts.users, User(..found, avatar: Some(avatar)))
   found.avatar
 }

@@ -1,28 +1,22 @@
-//// The user repository, answered from Postgres.
+//// The user store, answered from Postgres.
 
 import domain/accounts/user.{type User, User}
-import domain/accounts/user_repository.{
-  type Message, type UserRepository, DuplicateEmail, FindByEmail, Get, GetMany,
-  Insert, Inserted, Save,
+import domain/accounts/user_store.{
+  type Message, DuplicateEmail, FindByEmail, Get, GetMany, Insert, Inserted,
+  Save,
 }
-import domain/repository.{type Unavailable, Unavailable}
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/list
-import gleam/otp/actor
 import gleam/result
 import gloss/sql
+import gloss/store.{type Reply}
 
-/// Start the repository. Each message is answered in a process of its own,
-/// so statements run in parallel on the pool's connections.
-pub fn start(db: sql.Db) -> Result(UserRepository, actor.StartError) {
-  actor.new(db)
-  |> actor.on_message(fn(db, message) {
-    process.spawn_unlinked(fn() { answer(db, message) })
-    actor.continue(db)
-  })
-  |> actor.start
-  |> result.map(fn(started) { started.data })
+/// The store, ready to `store.start` or `store.supervised`. Each message is
+/// answered in a process of its own, so statements run in parallel on the
+/// pool's connections.
+pub fn new(db: sql.Db) -> store.Builder(Message) {
+  store.concurrent(db, answer)
 }
 
 fn answer(db: sql.Db, message: Message) -> Nil {
@@ -46,7 +40,7 @@ fn answer(db: sql.Db, message: Message) -> Nil {
           Ok(user) -> Ok(Inserted(user))
           Error(sql.UniqueViolation(constraint: "users_email_key", ..)) ->
             Ok(DuplicateEmail)
-          Error(error) -> Error(unavailable(error))
+          Error(error) -> store.from_sql(Error(error))
         },
       )
 
@@ -117,13 +111,6 @@ fn user_decoder() -> decode.Decoder(User) {
   ))
 }
 
-fn respond(
-  result: Result(a, sql.Error),
-  reply: process.Subject(Result(a, Unavailable)),
-) -> Nil {
-  process.send(reply, result.map_error(result, unavailable))
-}
-
-fn unavailable(error: sql.Error) -> Unavailable {
-  Unavailable(sql.describe(error))
+fn respond(result: Result(a, sql.Error), reply: Reply(a)) -> Nil {
+  process.send(reply, store.from_sql(result))
 }

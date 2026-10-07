@@ -1,31 +1,24 @@
-//// The thread repository, answered from Postgres.
+//// The thread store, answered from Postgres.
 
 import domain/forum/thread.{type Post, type Thread, Post, Thread}
-import domain/forum/thread_repository.{
-  type Message, type NewPost, type NewThread, type ThreadRepository, AddPost,
-  Get, Open, Recent,
+import domain/forum/thread_store.{
+  type Message, type NewPost, type NewThread, AddPost, Get, Open, Recent,
 }
-import domain/repository.{type Unavailable, Unavailable}
 import gleam/dict
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/list
 import gleam/option.{type Option, None}
-import gleam/otp/actor
 import gleam/result
 import gleam/time/timestamp.{type Timestamp}
 import gloss/sql
+import gloss/store.{type Reply}
 
-/// Start the repository. Each message is answered in a process of its own,
-/// so statements run in parallel on the pool's connections.
-pub fn start(db: sql.Db) -> Result(ThreadRepository, actor.StartError) {
-  actor.new(db)
-  |> actor.on_message(fn(db, message) {
-    process.spawn_unlinked(fn() { answer(db, message) })
-    actor.continue(db)
-  })
-  |> actor.start
-  |> result.map(fn(started) { started.data })
+/// The store, ready to `store.start` or `store.supervised`. Each message is
+/// answered in a process of its own, so statements run in parallel on the
+/// pool's connections.
+pub fn new(db: sql.Db) -> store.Builder(Message) {
+  store.concurrent(db, answer)
 }
 
 fn answer(db: sql.Db, message: Message) -> Nil {
@@ -148,8 +141,10 @@ fn with_posts(
     [] -> Ok([])
     _ ->
       sql.query(
-        "select thread_id, id, author_id, body, at from posts
-         where thread_id = any($1) order by id",
+        "select thread_id, id, author_id, body, at
+        from posts
+        where thread_id = any($1)
+        order by id",
       )
       |> sql.bind(sql.Array(list.map(rows, fn(row) { sql.Int(row.id) })))
       |> sql.returning({
@@ -189,12 +184,6 @@ fn transaction_error(
   }
 }
 
-fn respond(
-  result: Result(a, sql.Error),
-  reply: process.Subject(Result(a, Unavailable)),
-) -> Nil {
-  process.send(
-    reply,
-    result.map_error(result, fn(error) { Unavailable(sql.describe(error)) }),
-  )
+fn respond(result: Result(a, sql.Error), reply: Reply(a)) -> Nil {
+  process.send(reply, store.from_sql(result))
 }

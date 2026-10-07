@@ -1,17 +1,18 @@
-//// The repository contract, against each adapter. The Postgres adapters
+//// The store contract, against each adapter. The Postgres adapters
 //// run when TEST_DATABASE_URL is set; their tables are emptied first.
 
-import domain/accounts/user_repository.{Inserted, NewUser}
+import domain/accounts/user_store.{Inserted, NewUser}
 import envoy
 import gleam/time/timestamp
 import gloss/sql
+import gloss/store
 import gloss/tracer
 import infra/db
 import infra/db/threads
 import infra/db/users
 import support/memory_threads
 import support/memory_users
-import support/repository_contract as contract
+import support/store_contract as contract
 
 pub fn memory_users_test() {
   contract.users(memory_users.start())
@@ -23,14 +24,14 @@ pub fn memory_threads_test() {
 
 pub fn postgres_users_test() {
   use db <- with_database
-  let assert Ok(users) = users.start(db)
+  let assert Ok(users) = users.new(db) |> store.start
   contract.users(users)
 }
 
 pub fn postgres_threads_test() {
   use db <- with_database
-  let assert Ok(users) = users.start(db)
-  let assert Ok(threads) = threads.start(db)
+  let assert Ok(users) = users.new(db) |> store.start
+  let assert Ok(threads) = threads.new(db) |> store.start
   // Posts reference real users.
   let author = user(users, "author@x")
   let other = user(users, "other@x")
@@ -39,7 +40,7 @@ pub fn postgres_threads_test() {
 
 fn user(users, email) -> Int {
   let assert Inserted(user) =
-    user_repository.insert(
+    user_store.insert(
       users,
       NewUser(
         email:,
