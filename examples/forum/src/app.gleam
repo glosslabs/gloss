@@ -5,6 +5,7 @@ import app/sentry
 import app/tracing
 import domain/accounts
 import domain/forum
+import gloss/clock
 import gloss/http/server as http_server
 import gloss/meta
 import gloss/signal
@@ -30,8 +31,8 @@ pub fn main() -> Nil {
 
   let state =
     state.new(
-      accounts: accounts.new(users),
-      forum: forum.new(threads),
+      accounts: accounts.new(users, clock.system()),
+      forum: forum.new(threads, clock.system()),
       avatars_dir: config.data_dir <> "/avatars",
     )
 

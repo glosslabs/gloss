@@ -71,10 +71,10 @@ fn start_actor(path: String) -> Result(actor.Started(Store), actor.StartError) {
 
 fn store(tables: Tables) -> Store {
   Store(
-    load: fn(id) {
+    load: fn(id, now) {
       case lookup(tables, id) {
         Ok(#(data, expires_at)) ->
-          case expires_at > now_ms() {
+          case expires_at > to_ms(now) {
             True -> Ok(data)
             False -> Error(Nil)
           }

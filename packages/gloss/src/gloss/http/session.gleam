@@ -36,13 +36,15 @@ import gleam/float
 import gleam/option.{type Option, None, Some}
 import gleam/time/duration.{type Duration}
 import gleam/time/timestamp.{type Timestamp}
+import gloss/clock.{type Clock}
 import gloss/http/cookie.{type Attributes}
 import gloss/http/reply.{type Request, type Response}
 
-/// Where session data lives. `load` must not return expired sessions.
+/// Where session data lives. `load` is given the current time and must not
+/// return a session that expired before it.
 pub type Store {
   Store(
-    load: fn(String) -> Result(Dict(String, String), Nil),
+    load: fn(String, Timestamp) -> Result(Dict(String, String), Nil),
     save: fn(String, Dict(String, String), Timestamp) -> Nil,
     delete: fn(String) -> Nil,
   )
@@ -55,6 +57,7 @@ pub opaque type Sessions {
     cookie_name: String,
     ttl: Duration,
     attributes: Attributes,
+    clock: Clock,
   )
 }
 
@@ -74,7 +77,7 @@ pub opaque type Session {
 pub fn unconfigured() -> Sessions {
   new(
     Store(
-      load: fn(_) { Error(Nil) },
+      load: fn(_, _) { Error(Nil) },
       save: fn(_, _, _) {
         panic as "sessions are not configured: pass them to server.sessions"
       },
@@ -91,6 +94,7 @@ pub fn new(store: Store) -> Sessions {
     cookie_name: "session",
     ttl: duration.hours(24 * 14),
     attributes: cookie.defaults(),
+    clock: clock.system(),
   )
 }
 
@@ -101,6 +105,11 @@ pub fn cookie_name(sessions: Sessions, name: String) -> Sessions {
 /// How long a session lives after its last save.
 pub fn ttl(sessions: Sessions, ttl: Duration) -> Sessions {
   Sessions(..sessions, ttl:)
+}
+
+/// The clock that times sessions out, for tests. Default `clock.system()`.
+pub fn clock(sessions: Sessions, clock: Clock) -> Sessions {
+  Sessions(..sessions, clock:)
 }
 
 /// The cookie's attributes. Its `max_age` is always set from `ttl`.
@@ -116,7 +125,7 @@ pub fn cookie_attributes(
 pub fn load(req: Request, sessions: Sessions, next: fn(Session) -> a) -> a {
   let existing = case cookie.get(req, sessions.cookie_name) {
     Ok(id) ->
-      case sessions.store.load(id) {
+      case sessions.store.load(id, clock.now(sessions.clock)) {
         Ok(data) -> Some(#(id, data))
         Error(Nil) -> None
       }
@@ -162,7 +171,7 @@ pub fn save(session: Session, res: Response) -> Response {
   store.save(
     session.id,
     session.data,
-    timestamp.add(timestamp.system_time(), ttl),
+    timestamp.add(clock.now(session.sessions.clock), ttl),
   )
   cookie.set(res, session.sessions.cookie_name, session.id, attributes(session))
 }

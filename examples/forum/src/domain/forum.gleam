@@ -9,10 +9,10 @@ import gleam/int
 import gleam/list
 import gleam/option
 import gleam/result
-import gleam/time/timestamp
+import gloss/clock.{type Clock}
 
 pub opaque type Forum {
-  Forum(threads: ThreadStore)
+  Forum(threads: ThreadStore, clock: Clock)
 }
 
 pub type ReplyError {
@@ -25,8 +25,9 @@ pub type Page {
   Page(threads: List(Thread), number: Int, has_next: Bool)
 }
 
-pub fn new(threads: ThreadStore) -> Forum {
-  Forum(threads:)
+/// Posts are stamped with the time from `clock`.
+pub fn new(threads: ThreadStore, clock: Clock) -> Forum {
+  Forum(threads:, clock:)
 }
 
 pub fn open_thread(
@@ -37,7 +38,7 @@ pub fn open_thread(
 ) -> Result(Thread, PostError) {
   use title <- result.try(thread.title(title))
   use body <- result.try(thread.body(body))
-  let new = NewThread(title:, author_id:, body:, at: timestamp.system_time())
+  let new = NewThread(title:, author_id:, body:, at: clock.now(forum.clock))
   Ok(thread_store.open(forum.threads, new))
 }
 
@@ -48,7 +49,7 @@ pub fn reply(
   body: String,
 ) -> Result(Thread, ReplyError) {
   use body <- result.try(thread.body(body) |> result.map_error(InvalidReply))
-  let post = NewPost(thread_id:, author_id:, body:, at: timestamp.system_time())
+  let post = NewPost(thread_id:, author_id:, body:, at: clock.now(forum.clock))
   thread_store.add_post(forum.threads, post)
   |> option.to_result(ThreadNotFound)
 }

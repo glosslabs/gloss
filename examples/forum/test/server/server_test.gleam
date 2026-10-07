@@ -9,6 +9,7 @@ import gleam/erlang/process
 import gleam/int
 import gleam/list
 import gleam/string
+import gloss/clock
 import gloss/http/reply.{type Request}
 import gloss/http/server as gloss_server
 import gloss/logger
@@ -40,8 +41,8 @@ fn app_builder() -> gloss_server.Builder(state.State) {
     Config(..config.defaults(), port: 0, environment: "test", data_dir:)
   let state =
     state.new(
-      accounts: accounts.new(memory_users.start()),
-      forum: forum.new(memory_threads.start()),
+      accounts: accounts.new(memory_users.start(), clock.system()),
+      forum: forum.new(memory_threads.start(), clock.system()),
       avatars_dir: data_dir <> "/avatars",
     )
   server.builder(config, state, logger: logger.discard(), tracer: tracer.new())

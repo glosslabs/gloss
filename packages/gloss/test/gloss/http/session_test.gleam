@@ -1,11 +1,12 @@
-import gleam/erlang/process
 import gleam/http
 import gleam/http/request
 import gleam/http/response
 import gleam/list
 import gleam/string
 import gleam/time/duration
+import gleam/time/timestamp
 import gleeunit/should
+import gloss/clock
 import gloss/http/context
 import gloss/http/cookie
 import gloss/http/reply
@@ -121,10 +122,19 @@ pub fn destroy_removes_the_session_and_cookie_test() {
 }
 
 pub fn expired_sessions_are_not_loaded_test() {
-  let send = app(sessions() |> session.ttl(duration.milliseconds(20)))
-  let assert Ok(id) = session_cookie(send(request(http.Post, "/login/ada")))
-  process.sleep(40)
-  send(request(http.Get, "/read") |> with_session(id))
+  let assert Ok(store) = memory.start()
+  let at = fn(seconds) {
+    session.new(store)
+    |> session.ttl(duration.minutes(30))
+    |> session.clock(clock.fixed(timestamp.from_unix_seconds(seconds)))
+    |> app
+  }
+  let assert Ok(id) = session_cookie(at(0)(request(http.Post, "/login/ada")))
+
+  at(1799)(request(http.Get, "/read") |> with_session(id))
+  |> rendered_body
+  |> should.equal("ada")
+  at(1800)(request(http.Get, "/read") |> with_session(id))
   |> rendered_body
   |> should.equal("anonymous")
 }

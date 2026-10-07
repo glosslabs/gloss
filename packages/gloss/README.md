@@ -15,6 +15,8 @@ gleam-lang packages.
 | `gloss/meta` | Key/value metadata shared by the tracer and logger |
 | `gloss/scheduler` | Interval and cron tasks |
 | `gloss/signal` | SIGTERM/SIGHUP delivery for graceful shutdown |
+| `gloss/clock` | The current time as a value code is given (`system`, `fixed`, `new`), so tests can control it |
+| `gloss/id` | Id generators code is given: `uuid_v7(clock)`, `uuid_v4()`, or your own with `new` |
 | `gloss/password` | Password hashing (salted PBKDF2-SHA256) and constant-time verification |
 
 ## HTTP

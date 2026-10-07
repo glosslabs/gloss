@@ -13,15 +13,16 @@ import gleam/dict.{type Dict}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
-import gleam/time/timestamp
+import gloss/clock.{type Clock}
 import gloss/password
 
 pub opaque type Accounts {
-  Accounts(users: UserStore)
+  Accounts(users: UserStore, clock: Clock)
 }
 
-pub fn new(users: UserStore) -> Accounts {
-  Accounts(users:)
+/// New accounts are stamped with the time from `clock`.
+pub fn new(users: UserStore, clock: Clock) -> Accounts {
+  Accounts(users:, clock:)
 }
 
 /// Create an account. The password is hashed in the caller's process.
@@ -37,7 +38,7 @@ pub fn register(
       email:,
       display_name: user.default_name(email),
       password_hash: password.hash(plain),
-      joined_at: timestamp.system_time(),
+      joined_at: clock.now(accounts.clock),
     )
   case user_store.insert(accounts.users, new) {
     Inserted(user) -> Ok(user)

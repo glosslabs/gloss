@@ -53,9 +53,10 @@ pub fn sessions_survive_a_restart_test() {
   })
 
   let assert Ok(store) = file.start(path)
-  store.load("kept") |> should.equal(Ok(dict.from_list([#("user", "ada")])))
-  store.load("dropped") |> should.equal(Error(Nil))
-  store.load("stale") |> should.equal(Error(Nil))
+  store.load("kept", timestamp.system_time())
+  |> should.equal(Ok(dict.from_list([#("user", "ada")])))
+  store.load("dropped", timestamp.system_time()) |> should.equal(Error(Nil))
+  store.load("stale", timestamp.system_time()) |> should.equal(Error(Nil))
 }
 
 pub fn unopenable_file_fails_to_start_test() {
