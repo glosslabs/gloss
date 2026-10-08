@@ -64,7 +64,7 @@ pub fn a_gleam_panic_is_reported_with_its_stack_test() {
 pub fn an_erlang_error_is_reported_test() {
   let seen = process.new_subject()
   let sentry = start(seen)
-  erlang_spawn(fn() { divide(1, 0) })
+  erlang_spawn(fn() { divide(1, list.length([])) })
 
   let assert Ok(request) = process.receive(seen, 2000)
   assert exception(request, "type") == "badarith"

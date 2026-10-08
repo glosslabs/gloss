@@ -41,7 +41,7 @@
 
 import gleam/erlang/atom
 import gleam/erlang/node
-import gleam/erlang/process.{type Monitor, type Name, type Pid, type Subject}
+import gleam/erlang/process.{type Name, type Subject}
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/list
@@ -52,6 +52,7 @@ import gleam/result
 import gleam/string
 import gleam/time/duration.{type Duration}
 import gleam/time/timestamp
+import gloss/internal/poster.{type Poster}
 import gloss/internal/runtime
 import gloss/logger.{type Logger}
 import gloss/meta.{type Meta}
@@ -247,8 +248,8 @@ type Shell {
   Shell(
     subject: Subject(Message),
     send: fn(Request(String)) -> Result(Response(String), String),
-    /// The process posting the in-flight request, if any.
-    poster: Option(#(Pid, Monitor)),
+    /// The request in flight, if any.
+    poster: Poster,
     /// Callers of `flush` waiting for everything to be sent.
     waiting: List(Subject(Nil)),
     state: engine.State,
@@ -270,7 +271,7 @@ fn start_actor(
       Shell(
         subject:,
         send:,
-        poster: None,
+        poster: poster.new(),
         waiting: [],
         state: engine.init(settings),
       )
@@ -292,20 +293,13 @@ fn on_message(shell: Shell, message: Message) -> actor.Next(Shell, Message) {
     Engine(engine.Stop) -> actor.stop()
     Flush(reply:) ->
       step(Shell(..shell, waiting: [reply, ..shell.waiting]), engine.Tick)
-    Engine(engine.Down(process.ProcessDown(pid:, ..)) as down) ->
-      case shell.poster {
-        Some(#(poster, _)) if poster == pid ->
-          step(Shell(..shell, poster: None), down)
-        _ -> actor.continue(shell)
+    Engine(engine.Down(down) as message) ->
+      case poster.down(shell.poster, down) {
+        #(poster, True) -> step(Shell(..shell, poster:), message)
+        #(_, False) -> actor.continue(shell)
       }
-    Engine(engine.Down(process.PortDown(..))) -> actor.continue(shell)
-    Engine(engine.Posted(_) as posted) -> {
-      case shell.poster {
-        Some(#(_, monitor)) -> process.demonitor_process(monitor)
-        None -> Nil
-      }
-      step(Shell(..shell, poster: None), posted)
-    }
+    Engine(engine.Posted(_) as posted) ->
+      step(Shell(..shell, poster: poster.settled(shell.poster)), posted)
     Engine(message) -> step(shell, message)
   }
 }
@@ -329,15 +323,17 @@ fn perform(shell: Shell, effect: engine.Effect) -> Shell {
       process.send_after(shell.subject, after_ms, Engine(message))
       shell
     }
-    engine.Post(request) -> {
-      let inbox = shell.subject
-      let send = shell.send
-      let pid =
-        process.spawn_unlinked(fn() {
-          process.send(inbox, Engine(engine.Posted(send(request))))
-        })
-      Shell(..shell, poster: Some(#(pid, process.monitor(pid))))
-    }
+    engine.Post(request) ->
+      Shell(
+        ..shell,
+        poster: poster.post(
+          shell.poster,
+          shell.subject,
+          shell.send,
+          request,
+          fn(result) { Engine(engine.Posted(result)) },
+        ),
+      )
   }
 }
 
