@@ -59,10 +59,23 @@ fn render(value: Value) -> String {
 }
 
 fn quote(s: String) -> String {
-  let escaped =
-    s
-    |> string.replace("\\", "\\\\")
-    |> string.replace("\"", "\\\"")
-    |> string.replace("\n", "\\n")
+  // Most values have nothing to escape; checking the bytes is far cheaper
+  // than three replacements.
+  let escaped = case needs_escape(<<s:utf8>>) {
+    False -> s
+    True ->
+      s
+      |> string.replace("\\", "\\\\")
+      |> string.replace("\"", "\\\"")
+      |> string.replace("\n", "\\n")
+  }
   "\"" <> escaped <> "\""
+}
+
+fn needs_escape(bytes: BitArray) -> Bool {
+  case bytes {
+    <<0x5C, _:bytes>> | <<0x22, _:bytes>> | <<0x0A, _:bytes>> -> True
+    <<_, rest:bytes>> -> needs_escape(rest)
+    _ -> False
+  }
 }

@@ -38,11 +38,8 @@
 //// `meta` the attributes, and `trace` the span it happened in, if any.
 
 import gleam
-import gleam/bit_array
-import gleam/crypto
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import gleam/string
 import gleam/time/duration.{type Duration}
 import gleam/time/timestamp.{type Timestamp}
 import gloss/internal/runtime
@@ -107,11 +104,9 @@ pub fn child(parent: SpanContext) -> SpanContext {
   SpanContext(..parent, span_id: random_hex(8))
 }
 
-fn random_hex(bytes: Int) -> String {
-  crypto.strong_random_bytes(bytes)
-  |> bit_array.base16_encode
-  |> string.lowercase
-}
+/// `bytes` random bytes as lowercase hex.
+@external(erlang, "gloss@tracer_ffi", "random_hex")
+fn random_hex(bytes: Int) -> String
 
 pub type Level {
   Debug

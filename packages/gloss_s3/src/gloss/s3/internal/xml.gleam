@@ -117,7 +117,13 @@ fn element(bytes: BitArray) -> Result(#(Element, BitArray), String) {
       case rest {
         <<"/>":utf8, rest:bytes>> -> Ok(#(Element(name, []), rest))
         <<">":utf8, rest:bytes>> -> {
-          use #(children, rest) <- result.try(content(rest, name, [], <<>>))
+          use #(children, rest) <- result.try(content(
+            rest,
+            name,
+            [],
+            <<>>,
+            False,
+          ))
           Ok(#(Element(name, children), rest))
         }
         _ -> Error("unterminated tag <" <> name)
@@ -153,16 +159,18 @@ fn skip_attributes(bytes: BitArray) -> BitArray {
 }
 
 /// An element's children, up to its closing tag. `text` gathers the
-/// current run of character data.
+/// current run of character data; `has_child` says whether a child element
+/// has been read.
 fn content(
   bytes: BitArray,
   name: String,
   acc: List(Node),
   text: BitArray,
+  has_child: Bool,
 ) -> Result(#(List(Node), BitArray), String) {
   case bytes {
     <<"</":utf8, rest:bytes>> -> {
-      use acc <- result.try(flush(acc, text, True))
+      use acc <- result.try(flush(acc, text, True, has_child))
       let #(closing, rest) = take_name(rest, <<>>)
       case utf8(closing) {
         Ok(closing) if closing == name ->
@@ -174,25 +182,25 @@ fn content(
       }
     }
     <<"<!--":utf8, rest:bytes>> ->
-      content(after(rest, <<"-->":utf8>>), name, acc, text)
+      content(after(rest, <<"-->":utf8>>), name, acc, text, has_child)
     <<"<![CDATA[":utf8, rest:bytes>> -> {
       let #(data, rest) = until(rest, <<"]]>":utf8>>, <<>>)
-      content(rest, name, acc, <<text:bits, data:bits>>)
+      content(rest, name, acc, <<text:bits, data:bits>>, has_child)
     }
     <<"<?":utf8, rest:bytes>> ->
-      content(after(rest, <<"?>":utf8>>), name, acc, text)
+      content(after(rest, <<"?>":utf8>>), name, acc, text, has_child)
     <<"<":utf8, rest:bytes>> -> {
-      use acc <- result.try(flush(acc, text, False))
+      use acc <- result.try(flush(acc, text, False, has_child))
       use #(child, rest) <- result.try(element(rest))
-      content(rest, name, [Child(child), ..acc], <<>>)
+      content(rest, name, [Child(child), ..acc], <<>>, True)
     }
     <<"&":utf8, rest:bytes>> -> {
       let #(entity, rest) = until(rest, <<";":utf8>>, <<>>)
       use entity <- result.try(utf8(entity))
       use char <- result.try(entity_text(entity))
-      content(rest, name, acc, <<text:bits, char:utf8>>)
+      content(rest, name, acc, <<text:bits, char:utf8>>, has_child)
     }
-    <<c, rest:bytes>> -> content(rest, name, acc, <<text:bits, c>>)
+    <<c, rest:bytes>> -> content(rest, name, acc, <<text:bits, c>>, has_child)
     _ -> Error("unterminated element <" <> name <> ">")
   }
 }
@@ -229,20 +237,27 @@ fn flush(
   acc: List(Node),
   text: BitArray,
   closing: Bool,
+  has_child: Bool,
 ) -> Result(List(Node), String) {
-  use text <- result.map(utf8(text))
-  let has_child = list.any(acc, is_child)
-  case text, string.trim(text) {
-    "", _ -> acc
-    _, "" if !closing || has_child -> acc
-    _, _ -> [Text(text), ..acc]
+  case text, blank(text) {
+    <<>>, _ -> Ok(acc)
+    _, True if !closing || has_child -> Ok(acc)
+    _, _ -> {
+      use text <- result.map(utf8(text))
+      [Text(text), ..acc]
+    }
   }
 }
 
-fn is_child(node: Node) -> Bool {
-  case node {
-    Child(_) -> True
-    Text(_) -> False
+/// Whether bytes are only XML whitespace.
+fn blank(bytes: BitArray) -> Bool {
+  case bytes {
+    <<>> -> True
+    <<" ":utf8, rest:bytes>>
+    | <<"\n":utf8, rest:bytes>>
+    | <<"\r":utf8, rest:bytes>>
+    | <<"\t":utf8, rest:bytes>> -> blank(rest)
+    _ -> False
   }
 }
 

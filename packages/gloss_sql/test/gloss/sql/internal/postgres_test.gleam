@@ -1,5 +1,7 @@
+import gleam/list
 import gleam/option.{None, Some}
 import gleam/time/calendar
+import gleam/time/duration
 import gleam/time/timestamp
 import gloss/sql
 import gloss/sql/internal/postgres as codec
@@ -70,4 +72,45 @@ pub fn encodes_arguments_test() {
       sql.Array([sql.Text("a\"b"), sql.Null, sql.Array([sql.Int(1)])]),
     )
     == Some(#(0, <<"{\"a\\\"b\",NULL,{\"1\"}}":utf8>>))
+}
+
+pub fn timestamps_decode_like_the_calendar_test() {
+  let at = fn(y, mo, d, h, mi, s, nanos, offset_seconds) {
+    let assert Ok(month) = calendar.month_from_int(mo)
+    timestamp.from_calendar(
+      calendar.Date(y, month, d),
+      calendar.TimeOfDay(h, mi, s, nanos),
+      duration.seconds(offset_seconds),
+    )
+  }
+  let cases = [
+    #(
+      "2026-10-08 12:30:45.123456+00",
+      at(2026, 10, 8, 12, 30, 45, 123_456_000, 0),
+    ),
+    #("2024-02-29 23:59:59+00", at(2024, 2, 29, 23, 59, 59, 0, 0)),
+    #("2000-03-01 00:00:00-05", at(2000, 3, 1, 0, 0, 0, 0, -18_000)),
+    #(
+      "1969-12-31 23:59:59.5+05:30",
+      at(1969, 12, 31, 23, 59, 59, 500_000_000, 19_800),
+    ),
+    #("1900-01-01 00:00:00+00", at(1900, 1, 1, 0, 0, 0, 0, 0)),
+    #("0001-01-01 00:00:00+00", at(1, 1, 1, 0, 0, 0, 0, 0)),
+    #(
+      "9999-12-31 23:59:59.999999+00",
+      at(9999, 12, 31, 23, 59, 59, 999_999_000, 0),
+    ),
+    #(
+      "2026-10-08 12:30:45.1+01:02:03",
+      at(2026, 10, 8, 12, 30, 45, 100_000_000, 3723),
+    ),
+    #(
+      "2026-10-08 12:30:45.123456789",
+      at(2026, 10, 8, 12, 30, 45, 123_456_789, 0),
+    ),
+  ]
+  list.each(cases, fn(case_) {
+    let #(text, expected) = case_
+    assert codec.decode(1184, <<text:utf8>>) == sql.Timestamp(expected)
+  })
 }

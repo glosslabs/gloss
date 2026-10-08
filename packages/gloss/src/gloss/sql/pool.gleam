@@ -292,7 +292,11 @@ fn describe_script(db: Db, sql: String) -> meta.Meta {
 
 fn run(db: Db, statement: Statement(row)) -> Result(Outcome, Error) {
   let #(text, args) = sql.render(statement, db.placeholder)
-  let name = sql.name(statement, text)
+  // Naming the statement costs string work, so only when it is traced.
+  let name = case tracer.enabled(db.tracer) {
+    True -> sql.name(statement, text)
+    False -> ""
+  }
   let meta = fn() {
     [
       #("driver", meta.String(db.driver)),

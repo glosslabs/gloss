@@ -118,7 +118,10 @@ fn decode_scalar(oid: Int, text: String) -> Value {
     17 -> parse_bytea(text) |> result.map(sql.Bytes)
     1082 -> parse_date(text) |> result.map(sql.Date)
     1083 -> parse_time(text) |> result.map(sql.Time)
-    1114 | 1184 -> parse_timestamp(text) |> result.map(sql.Timestamp)
+    1114 | 1184 ->
+      fast_timestamp(<<text:utf8>>)
+      |> result.lazy_or(fn() { parse_timestamp(text) })
+      |> result.map(sql.Timestamp)
     _ -> Error(Nil)
   }
   result.unwrap(value, sql.Text(text))
@@ -217,6 +220,147 @@ fn parse_time(text: String) -> Result(calendar.TimeOfDay, Nil) {
 
 /// `2024-01-02 03:04:05.123456` with an optional UTC offset: `+00`,
 /// `-05:30` or `+05:30:15`. Without one the time is taken as UTC.
+/// The usual shape, `YYYY-MM-DD HH:MM:SS[.ffffff][+HH[:MM[:SS]]]`, read
+/// straight from the bytes. Anything else (BC dates, long years) is left
+/// to `parse_timestamp`.
+fn fast_timestamp(raw: BitArray) -> Result(timestamp.Timestamp, Nil) {
+  case raw {
+    <<
+      y1,
+      y2,
+      y3,
+      y4,
+      "-":utf8,
+      m1,
+      m2,
+      "-":utf8,
+      d1,
+      d2,
+      " ":utf8,
+      h1,
+      h2,
+      ":":utf8,
+      i1,
+      i2,
+      ":":utf8,
+      s1,
+      s2,
+      rest:bytes,
+    >> -> {
+      use year <- result.try(number([y1, y2, y3, y4]))
+      use month <- result.try(number([m1, m2]))
+      use day <- result.try(number([d1, d2]))
+      use hour <- result.try(number([h1, h2]))
+      use minute <- result.try(number([i1, i2]))
+      use second <- result.try(number([s1, s2]))
+      use #(nanos, rest) <- result.try(fraction(rest))
+      use offset <- result.try(fast_offset(rest))
+      let seconds =
+        days_from_civil(year, month, day)
+        * 86_400
+        + hour
+        * 3600
+        + minute
+        * 60
+        + second
+        - offset
+      Ok(timestamp.from_unix_seconds_and_nanoseconds(seconds, nanos))
+    }
+    _ -> Error(Nil)
+  }
+}
+
+fn number(digits: List(Int)) -> Result(Int, Nil) {
+  list.try_fold(digits, 0, fn(acc, c) {
+    case c >= 0x30 && c <= 0x39 {
+      True -> Ok(acc * 10 + c - 0x30)
+      False -> Error(Nil)
+    }
+  })
+}
+
+/// `.ffffff` as nanoseconds, and the bytes after it.
+fn fraction(bytes: BitArray) -> Result(#(Int, BitArray), Nil) {
+  case bytes {
+    <<".":utf8, rest:bytes>> -> fraction_digits(rest, 0, 0)
+    _ -> Ok(#(0, bytes))
+  }
+}
+
+fn fraction_digits(
+  bytes: BitArray,
+  value: Int,
+  count: Int,
+) -> Result(#(Int, BitArray), Nil) {
+  case bytes {
+    <<c, rest:bytes>> if c >= 0x30 && c <= 0x39 && count < 9 ->
+      fraction_digits(rest, value * 10 + c - 0x30, count + 1)
+    <<c, _:bytes>> if c >= 0x30 && c <= 0x39 -> Error(Nil)
+    _ -> Ok(#(value * pow10(9 - count), bytes))
+  }
+}
+
+fn pow10(n: Int) -> Int {
+  case n {
+    0 -> 1
+    _ -> 10 * pow10(n - 1)
+  }
+}
+
+/// `+HH`, `+HH:MM` or `+HH:MM:SS` (or `-`) in seconds east of UTC; none is
+/// UTC.
+fn fast_offset(bytes: BitArray) -> Result(Int, Nil) {
+  let signed = fn(sign, seconds) {
+    case sign {
+      0x2B -> Ok(seconds)
+      _ -> Ok(-seconds)
+    }
+  }
+  case bytes {
+    <<>> -> Ok(0)
+    <<sign, h1, h2>> if sign == 0x2B || sign == 0x2D -> {
+      use h <- result.try(number([h1, h2]))
+      signed(sign, h * 3600)
+    }
+    <<sign, h1, h2, ":":utf8, m1, m2>> if sign == 0x2B || sign == 0x2D -> {
+      use h <- result.try(number([h1, h2]))
+      use m <- result.try(number([m1, m2]))
+      signed(sign, h * 3600 + m * 60)
+    }
+    <<sign, h1, h2, ":":utf8, m1, m2, ":":utf8, s1, s2>>
+      if sign == 0x2B || sign == 0x2D
+    -> {
+      use h <- result.try(number([h1, h2]))
+      use m <- result.try(number([m1, m2]))
+      use s <- result.try(number([s1, s2]))
+      signed(sign, h * 3600 + m * 60 + s)
+    }
+    _ -> Error(Nil)
+  }
+}
+
+/// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's
+/// `days_from_civil`).
+fn days_from_civil(year: Int, month: Int, day: Int) -> Int {
+  let year = case month <= 2 {
+    True -> year - 1
+    False -> year
+  }
+  let era = case year >= 0 {
+    True -> year / 400
+    False -> { year - 399 } / 400
+  }
+  let year_of_era = year - era * 400
+  let month_index = case month > 2 {
+    True -> month - 3
+    False -> month + 9
+  }
+  let day_of_year = { 153 * month_index + 2 } / 5 + day - 1
+  let day_of_era =
+    year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year
+  era * 146_097 + day_of_era - 719_468
+}
+
 fn parse_timestamp(text: String) -> Result(timestamp.Timestamp, Nil) {
   use #(date, time) <- result.try(string.split_once(text, " "))
   use date <- result.try(parse_date(date))

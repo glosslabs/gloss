@@ -51,6 +51,7 @@
 //// `Outcome`; `all`, `optional` and `one` decode it, and `name` is what to
 //// call the statement in traces.
 
+import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode.{type Decoder}
 import gleam/int
@@ -266,11 +267,24 @@ pub fn label_of(statement: Statement(row)) -> Option(String) {
 }
 
 fn operation(sql: String) -> String {
-  let sql = string.trim_start(sql)
-  case string.split_once(sql, " ") {
-    Ok(#(word, _)) -> string.lowercase(string.trim_end(word))
-    Error(Nil) -> string.lowercase(sql)
+  first_word(<<sql:utf8>>, <<>>) |> string.lowercase
+}
+
+/// The first run of characters after any leading whitespace.
+fn first_word(bytes: BitArray, word: BitArray) -> String {
+  case bytes, word {
+    <<c, rest:bytes>>, <<>>
+      if c == 0x20 || c == 0x0a || c == 0x0d || c == 0x09
+    -> first_word(rest, word)
+    <<c, _:bytes>>, _ if c == 0x20 || c == 0x0a || c == 0x0d || c == 0x09 ->
+      bit_array_text(word)
+    <<c, rest:bytes>>, _ -> first_word(rest, <<word:bits, c>>)
+    _, _ -> bit_array_text(word)
   }
+}
+
+fn bit_array_text(bytes: BitArray) -> String {
+  bit_array.to_string(bytes) |> result.unwrap("")
 }
 
 // --- Outcomes ----------------------------------------------------------------

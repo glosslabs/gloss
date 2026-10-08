@@ -1,5 +1,7 @@
 import gleam/dynamic/decode
+import gleam/erlang/process
 import gleam/int
+import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
 import gleam/time/calendar
@@ -226,4 +228,108 @@ fn unique_integer() -> Int
 
 fn unique() -> Int {
   int.absolute_value(unique_integer())
+}
+
+fn file_db(size: Int, timeout: duration.Duration) -> pool.Db {
+  let path =
+    "build/test-sqlite-"
+    <> int.to_string(system_time())
+    <> "-"
+    <> int.to_string(unique())
+    <> ".db"
+  let assert Ok(db) =
+    pool.new(sqlite.driver(sqlite.file(path)))
+    |> pool.size(size)
+    |> pool.query_timeout(timeout)
+    |> pool.start
+  let assert Ok(Nil) = pool.script(db, "create table hits (n integer not null)")
+  db
+}
+
+fn count(db: pool.Db) -> Int {
+  let assert Ok(n) =
+    sql.query("select count(*) from hits")
+    |> sql.returning(decode.at([0], decode.int))
+    |> pool.one(db, _)
+  n
+}
+
+fn hit(db: pool.Db) -> Result(Int, sql.Error) {
+  pool.exec(db, sql.query("insert into hits (n) values (1)"))
+}
+
+pub fn concurrent_writers_queue_instead_of_failing_test() {
+  let db = file_db(5, duration.seconds(5))
+  let done = process.new_subject()
+  list.each(list.repeat(Nil, 20), fn(_) {
+    process.spawn(fn() {
+      list.each(list.repeat(Nil, 50), fn(_) {
+        let assert Ok(1) = hit(db)
+      })
+      process.send(done, Nil)
+    })
+  })
+  list.each(list.repeat(Nil, 20), fn(_) {
+    let assert Ok(Nil) = process.receive(done, 10_000)
+  })
+  assert count(db) == 1000
+  pool.shutdown(db)
+}
+
+pub fn a_transaction_that_dies_releases_the_lock_test() {
+  let db = file_db(2, duration.seconds(5))
+  let died = process.new_subject()
+  process.spawn_unlinked(fn() {
+    let _ =
+      pool.transaction(db, fn(tx) {
+        let assert Ok(1) = hit(tx)
+        process.send(died, Nil)
+        panic as "gone"
+      })
+    Nil
+  })
+  let assert Ok(Nil) = process.receive(died, 1000)
+  // Its write is rolled back and others can write at once.
+  assert hit(db) == Ok(1)
+  assert count(db) == 1
+  pool.shutdown(db)
+}
+
+pub fn a_timeout_in_a_transaction_releases_the_lock_test() {
+  let db = file_db(2, duration.milliseconds(100))
+  let forever =
+    "with recursive n(i) as (select 1 union all select i + 1 from n)
+     select count(*) from n"
+  let result =
+    pool.transaction(db, fn(tx) {
+      let assert Ok(1) = hit(tx)
+      pool.exec(tx, sql.query(forever))
+    })
+  assert result == Error(sql.RolledBack(sql.QueryTimeout))
+    || result == Error(sql.TransactionFailed(sql.QueryTimeout))
+  assert hit(db) == Ok(1)
+  pool.shutdown(db)
+}
+
+pub fn reads_do_not_wait_for_a_writing_transaction_test() {
+  let db = file_db(3, duration.seconds(5))
+  let assert Ok(1) = hit(db)
+  let inside = process.new_subject()
+  process.spawn(fn() {
+    let finish = process.new_subject()
+    let _ =
+      pool.transaction(db, fn(tx) {
+        let assert Ok(1) = hit(tx)
+        process.send(inside, finish)
+        let assert Ok(Nil) = process.receive(finish, 5000)
+        Ok(Nil)
+      })
+    Nil
+  })
+  let assert Ok(finish) = process.receive(inside, 1000)
+  // The transaction holds the write lock; a read still answers, seeing
+  // only committed rows.
+  assert count(db) == 1
+  process.send(finish, Nil)
+  pool.shutdown(db)
 }

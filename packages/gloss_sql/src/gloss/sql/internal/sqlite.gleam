@@ -10,6 +10,7 @@
 import gleam/bit_array
 import gleam/float
 import gleam/int
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
@@ -51,25 +52,56 @@ pub fn encode(value: sql.Value) -> Result(Cell, sql.Error) {
   }
 }
 
-/// The value for a cell read from a column declared as `declared`.
-pub fn decode(cell: Cell, declared: Option(String)) -> sql.Value {
+/// How a column's values are read, from its declared type. Work it out once
+/// per column with `column`, then read each cell with `read`.
+pub opaque type Column {
+  Column(kind: String)
+}
+
+/// The column for a declared type: `BOOLEAN`, `TIMESTAMP` or `DATETIME`,
+/// `DATE`, `TIME` and `BLOB` (in any case) name Gleam values; anything else
+/// keeps what SQLite stored.
+pub fn column(declared: Option(String)) -> Column {
   let declared = option.map(declared, string.uppercase) |> option.unwrap("")
-  let kind = case declared {
+  let bytes = <<declared:utf8>>
+  Column(case declared {
+    "" | "INTEGER" | "TEXT" | "REAL" -> ""
     "DATE" -> "date"
     "TIME" -> "time"
     _ ->
       case
-        string.contains(declared, "BOOL"),
-        string.contains(declared, "TIMESTAMP")
-        || string.contains(declared, "DATETIME"),
-        string.contains(declared, "BLOB")
+        contains(bytes, <<"BOOL":utf8>>),
+        contains(bytes, <<"TIMESTAMP":utf8>>)
+        || contains(bytes, <<"DATETIME":utf8>>),
+        contains(bytes, <<"BLOB":utf8>>)
       {
         True, _, _ -> "bool"
         _, True, _ -> "timestamp"
         _, _, True -> "blob"
         _, _, _ -> ""
       }
+  })
+}
+
+/// Whether `needle` occurs in `haystack`. Declared types are short, so a
+/// plain scan beats compiling a search pattern for each one.
+fn contains(haystack: BitArray, needle: BitArray) -> Bool {
+  let size = bit_array.byte_size(needle)
+  case haystack {
+    <<head:bytes-size(size), _:bytes>> if head == needle -> True
+    <<_, rest:bytes>> -> contains(rest, needle)
+    _ -> False
   }
+}
+
+/// The value for a cell read from a column declared as `declared`.
+pub fn decode(cell: Cell, declared: Option(String)) -> sql.Value {
+  read(cell, column(declared))
+}
+
+/// The value for a cell of `column`.
+pub fn read(cell: Cell, column: Column) -> sql.Value {
+  let kind = column.kind
   case cell, kind {
     Null, _ -> sql.Null
     Integer(i), "bool" -> sql.Bool(i != 0)
@@ -199,4 +231,10 @@ pub fn declared(text: String) -> Option(String) {
     "" -> None
     _ -> Some(text)
   }
+}
+
+/// The columns for a statement's declared types, as drivers report them
+/// (`""` for none).
+pub fn columns(declared_types: List(String)) -> List(Column) {
+  list.map(declared_types, fn(text) { column(declared(text)) })
 }

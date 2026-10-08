@@ -1,5 +1,5 @@
 -module('gloss@tracer_ffi').
--export([current/0, with_current/2]).
+-export([current/0, with_current/2, random_hex/1]).
 
 -define(KEY, gloss_tracer_current).
 
@@ -20,3 +20,6 @@ with_current(Context, Work) ->
             _ -> erlang:put(?KEY, Previous)
         end
     end.
+
+%% Random bytes as lowercase hex, for trace and span ids.
+random_hex(Bytes) -> binary:encode_hex(crypto:strong_rand_bytes(Bytes), lowercase).

@@ -23,3 +23,7 @@ pub fn pbkdf2_sha256(
   iterations: Int,
   length: Int,
 ) -> BitArray
+
+/// Bytes as lowercase hex.
+@external(erlang, "gloss@internal@runtime_ffi", "lower_hex")
+pub fn lower_hex(bytes: BitArray) -> String

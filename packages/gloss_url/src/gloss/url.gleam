@@ -23,7 +23,6 @@
 //// signature scheme (S3's, OAuth's) agrees on.
 
 import gleam/bit_array
-import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -180,21 +179,40 @@ pub fn fragment(url: Url) -> Option(String) {
 /// Percent-encode everything but the unreserved characters
 /// `A-Z a-z 0-9 - _ . ~` (RFC 3986), as UTF-8.
 pub fn encode(text: String) -> String {
-  encode_bytes(<<text:utf8>>, [])
+  let bytes = <<text:utf8>>
+  encode_from(bytes, bytes, 0, 0, [])
 }
 
-fn encode_bytes(bytes: BitArray, acc: List(String)) -> String {
-  case bytes {
-    <<>> -> string.concat(list.reverse(acc))
+/// Copy runs of unreserved bytes as they are, slicing them from `all`, and
+/// escape the bytes between them.
+fn encode_from(
+  all: BitArray,
+  rest: BitArray,
+  run_start: Int,
+  position: Int,
+  acc: List(String),
+) -> String {
+  case rest {
     <<byte, rest:bytes>> ->
-      encode_bytes(rest, [
-        case unreserved(byte) {
-          True -> byte_to_string(byte)
-          False -> "%" <> hex(byte)
-        },
-        ..acc
-      ])
-    _ -> string.concat(list.reverse(acc))
+      case unreserved(byte) {
+        True -> encode_from(all, rest, run_start, position + 1, acc)
+        False -> {
+          let acc = [escape(byte), ..run(all, run_start, position, acc)]
+          encode_from(all, rest, position + 1, position + 1, acc)
+        }
+      }
+    _ -> string.concat(list.reverse(run(all, run_start, position, acc)))
+  }
+}
+
+fn run(all: BitArray, from: Int, to: Int, acc: List(String)) -> List(String) {
+  case to > from {
+    True -> {
+      let assert Ok(slice) = bit_array.slice(all, from, to - from)
+      let assert Ok(text) = bit_array.to_string(slice)
+      [text, ..acc]
+    }
+    False -> acc
   }
 }
 
@@ -208,13 +226,29 @@ fn unreserved(byte: Int) -> Bool {
   || byte == 0x7E
 }
 
-fn byte_to_string(byte: Int) -> String {
-  let assert Ok(text) = bit_array.to_string(<<byte>>)
-  text
+fn escape(byte: Int) -> String {
+  "%" <> hex_digit(byte / 16) <> hex_digit(byte % 16)
 }
 
-fn hex(byte: Int) -> String {
-  string.pad_start(string.uppercase(int.to_base16(byte)), 2, "0")
+fn hex_digit(n: Int) -> String {
+  case n {
+    0 -> "0"
+    1 -> "1"
+    2 -> "2"
+    3 -> "3"
+    4 -> "4"
+    5 -> "5"
+    6 -> "6"
+    7 -> "7"
+    8 -> "8"
+    9 -> "9"
+    10 -> "A"
+    11 -> "B"
+    12 -> "C"
+    13 -> "D"
+    14 -> "E"
+    _ -> "F"
+  }
 }
 
 /// Decode `%XX` escapes. `Error(Nil)` when an escape is malformed or the

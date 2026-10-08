@@ -113,13 +113,9 @@ fn run(
   use #(types, rows, affected) <- result.map(
     ffi_run(handle, text, cells, timeout) |> result.map_error(failure),
   )
-  let declared = list.map(types, sqlite.declared)
+  let columns = sqlite.columns(types)
   sql.Outcome(
-    rows: list.map(rows, fn(row) {
-      list.map2(row, declared, fn(cell, declared) {
-        sqlite.decode(cell, declared)
-      })
-    }),
+    rows: list.map(rows, fn(row) { list.map2(row, columns, sqlite.read) }),
     affected:,
   )
 }

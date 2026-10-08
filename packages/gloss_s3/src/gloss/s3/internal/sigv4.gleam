@@ -2,7 +2,6 @@
 //// header, and presigning URLs with the signature in the query string.
 //// See https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-authenticating-requests.html
 
-import gleam/bit_array
 import gleam/crypto
 import gleam/http
 import gleam/http/request.{type Request}
@@ -14,6 +13,7 @@ import gleam/result
 import gleam/string
 import gleam/time/calendar
 import gleam/time/timestamp.{type Timestamp}
+import gloss/internal/runtime
 import gloss/url
 
 pub type Credentials {
@@ -166,7 +166,7 @@ fn scope(date: String, region: String) -> String {
 /// The request's headers and `host`, lower-cased, trimmed and sorted.
 fn signed_headers(req: Request(BitArray)) -> List(#(String, String)) {
   [#("host", host(req)), ..req.headers]
-  |> list.map(fn(h) { #(string.lowercase(h.0), collapse(string.trim(h.1))) })
+  |> list.map(fn(h) { #(string.lowercase(h.0), canonical_value(h.1)) })
   |> list.sort(fn(a, b) { string.compare(a.0, b.0) })
 }
 
@@ -174,7 +174,28 @@ fn header_names(headers: List(#(String, String))) -> String {
   list.map(headers, fn(h) { h.0 }) |> string.join(";")
 }
 
-/// Runs of spaces inside a header value become one.
+/// A header value trimmed, with runs of spaces inside it made one. Most
+/// values need neither, which a scan of the bytes finds without building
+/// anything.
+fn canonical_value(value: String) -> String {
+  case tidy(<<value:utf8>>, True) {
+    True -> value
+    False -> collapse(string.trim(value))
+  }
+}
+
+/// Whether bytes have no leading, trailing or doubled spaces or tabs.
+fn tidy(bytes: BitArray, at_start: Bool) -> Bool {
+  case bytes {
+    <<>> -> True
+    <<c>> -> c != 0x20 && c != 0x09
+    <<c, _:bytes>> if at_start && { c == 0x20 || c == 0x09 } -> False
+    <<0x20, 0x20, _:bytes>> -> False
+    <<_, rest:bytes>> -> tidy(rest, False)
+    _ -> True
+  }
+}
+
 fn collapse(value: String) -> String {
   case string.contains(value, "  ") {
     True -> collapse(string.replace(value, "  ", " "))
@@ -276,5 +297,5 @@ pub fn sha256_hex(data: BitArray) -> String {
 }
 
 fn hex(bytes: BitArray) -> String {
-  bit_array.base16_encode(bytes) |> string.lowercase
+  runtime.lower_hex(bytes)
 }
