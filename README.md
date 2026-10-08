@@ -18,6 +18,7 @@ Gloss is a progressive framework for building modern web applications with [Glea
 | [`gloss`](packages/gloss) | HTTP server and router, database pool (`gloss/sql/pool`), tracer, logger, scheduler and signals |
 | [`gloss_sql`](packages/gloss_sql) | SQL statements, values, errors and row decoding for every driver, on the BEAM and in JavaScript (`gloss/sql`) |
 | [`gloss_pg`](packages/gloss_pg) | Postgres driver for `gloss/sql/pool` (`gloss/pg`) |
+| [`gloss_mysql`](packages/gloss_mysql) | MySQL driver for `gloss/sql/pool`, speaking the protocol directly: caching_sha2 and native auth, TLS, prepared statements (`gloss/mysql`) |
 | [`gloss_sql_async`](packages/gloss_sql_async) | Running `gloss/sql` statements in JavaScript, returning Promises (`gloss/sql/async`) |
 | [`gloss_sqlite`](packages/gloss_sqlite) | SQLite driver for `gloss/sql/pool`, on the esqlite NIF (`gloss/sqlite`) |
 | [`gloss_sqlite_wasm`](packages/gloss_sqlite_wasm) | SQLite in the browser on the official WebAssembly build, with OPFS storage (`gloss/sqlite/wasm`) |
