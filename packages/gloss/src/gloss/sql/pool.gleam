@@ -37,7 +37,6 @@
 //// trace; `child_of` names a parent explicitly.
 
 import gleam/dynamic.{type Dynamic}
-import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Name, type Pid, type Subject}
 import gleam/int
 import gleam/list
@@ -47,7 +46,6 @@ import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import gleam/string
 import gleam/time/duration.{type Duration}
-import gleam/time/timestamp
 import gloss/internal/sql_pool.{type Lease}
 import gloss/meta
 import gloss/sql.{
@@ -415,36 +413,28 @@ fn traced_transaction(
   meta: fn() -> meta.Meta,
   work: fn(Db) -> Result(a, TransactionError(e)),
 ) -> Result(a, TransactionError(e)) {
-  case tracer.enabled(db.tracer) {
-    False -> work(db)
-    True -> {
-      let trace = span_context(parent(db))
-      let at = timestamp.system_time()
-      let started = monotonic_ns()
-      let result = work(Db(..db, parent: Some(trace)))
-      let #(outcome, error) = case result {
-        Ok(_) -> #("committed", None)
-        Error(sql.RolledBack(_)) -> #("rolled_back", None)
-        Error(sql.TransactionFailed(error)) -> #(
-          "failed",
-          Some(sql.describe(error)),
-        )
+  use <- in_parent(db)
+  tracer.span_result(
+    db.tracer,
+    source:,
+    name: "transaction",
+    meta: fn(result) {
+      let outcome = case result {
+        Ok(_) -> "committed"
+        Error(sql.RolledBack(_)) -> "rolled_back"
+        Error(sql.TransactionFailed(_)) -> "failed"
       }
-      tracer.emit(db.tracer, fn() {
-        tracer.Span(
-          source:,
-          name: "transaction",
-          at:,
-          meta: [#("outcome", meta.String(outcome)), ..meta()],
-          duration: duration.nanoseconds(monotonic_ns() - started),
-          error:,
-          trace:,
-          parent_span_id: option.map(parent(db), fn(parent) { parent.span_id }),
-        )
-      })
-      result
-    }
-  }
+      [#("outcome", meta.String(outcome)), ..meta()]
+    },
+    failure: fn(error) {
+      case error {
+        sql.TransactionFailed(error) -> Some(sql.describe(error))
+        sql.RolledBack(_) -> None
+      }
+    },
+    // The body's statements join the transaction's span, which is current.
+    work: fn() { work(Db(..db, parent: None)) },
+  )
 }
 
 // --- Connections and spans ---------------------------------------------------
@@ -497,49 +487,30 @@ fn traced(
   rows: fn(a) -> Int,
   work: fn() -> Result(a, Error),
 ) -> Result(a, Error) {
-  case tracer.enabled(db.tracer) {
-    False -> work()
-    True -> {
-      let at = timestamp.system_time()
-      let started = monotonic_ns()
-      let result = work()
-      let duration = duration.nanoseconds(monotonic_ns() - started)
-      tracer.emit(db.tracer, fn() {
-        let #(rows, error) = case result {
-          Ok(value) -> #(rows(value), None)
-          Error(error) -> #(0, Some(sql.describe(error)))
-        }
-        tracer.Span(
-          source:,
-          name:,
-          at:,
-          meta: list.append(meta(), [#("rows", meta.Int(rows))]),
-          duration:,
-          error:,
-          trace: span_context(parent(db)),
-          parent_span_id: option.map(parent(db), fn(parent) { parent.span_id }),
-        )
-      })
-      result
-    }
+  use <- in_parent(db)
+  tracer.span_result(
+    db.tracer,
+    source:,
+    name:,
+    meta: fn(result) {
+      let rows = case result {
+        Ok(value) -> rows(value)
+        Error(_) -> 0
+      }
+      list.append(meta(), [#("rows", meta.Int(rows))])
+    },
+    failure: fn(error) { Some(sql.describe(error)) },
+    work:,
+  )
+}
+
+/// Run `work` with the parent named by `child_of`, if any, as the current
+/// span; otherwise spans join the caller's current span.
+fn in_parent(db: Db, work: fn() -> a) -> a {
+  case db.parent {
+    Some(parent) -> tracer.with_current(parent, work)
+    None -> work()
   }
-}
-
-/// The span a statement belongs to: the one given with `child_of`, or else
-/// the calling process's current span (a request's, under gloss/http).
-fn parent(db: Db) -> Option(SpanContext) {
-  option.or(db.parent, tracer.current())
-}
-
-fn span_context(parent: Option(SpanContext)) -> SpanContext {
-  case parent {
-    Some(parent) -> tracer.child(parent)
-    None -> tracer.root()
-  }
-}
-
-fn monotonic_ns() -> Int {
-  monotonic_time(atom.create("nanosecond"))
 }
 
 // --- FFI ---------------------------------------------------------------------
@@ -551,6 +522,3 @@ fn rescue(work: fn() -> a) -> Result(a, Crash)
 
 @external(erlang, "gloss@sql_ffi", "reraise")
 fn reraise(crash: Crash) -> a
-
-@external(erlang, "erlang", "monotonic_time")
-fn monotonic_time(unit: Atom) -> Int

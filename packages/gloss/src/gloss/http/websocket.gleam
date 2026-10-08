@@ -93,7 +93,7 @@
 import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
-import gleam/erlang/atom.{type Atom}
+import gleam/erlang/atom
 import gleam/erlang/process.{type Pid, type Selector, type Subject}
 import gleam/http
 import gleam/http/request
@@ -114,6 +114,7 @@ import gloss/internal/http_websocket_frame.{
   type Frame, type Opcode, BinaryFrame, CloseFrame, Continuation, Frame,
   Incomplete, Invalid, PingFrame, PongFrame, TextFrame,
 } as frame
+import gloss/internal/runtime
 import gloss/meta
 import gloss/tracer.{type SpanContext, type Tracer}
 
@@ -1031,11 +1032,8 @@ fn truncate(text: String, limit: Int) -> String {
 }
 
 fn now_ms() -> Int {
-  monotonic_time(atom.create("millisecond"))
+  runtime.monotonic_ms()
 }
-
-@external(erlang, "erlang", "monotonic_time")
-fn monotonic_time(unit: Atom) -> Int
 
 // --- Sending -----------------------------------------------------------------
 

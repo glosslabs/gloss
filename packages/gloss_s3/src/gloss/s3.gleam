@@ -760,31 +760,22 @@ fn run(
       clock.now(client.clock),
       sigv4.sha256_hex(req.body),
     )
-  let parent = tracer.current()
-  let at = timestamp.system_time()
-  let started = monotonic_ns()
-  let result = case client.send(signed) {
-    Error(reason) -> Error(Transport(reason))
-    Ok(res) if res.status >= 200 && res.status < 300 -> Ok(res)
-    Ok(res) -> Error(response_error(res))
-  }
-  let elapsed = duration.nanoseconds(monotonic_ns() - started)
-  tracer.emit(client.tracer, fn() {
-    let status = case result {
-      Ok(res) -> [#("status", meta.Int(res.status))]
-      Error(ServerError(status:, ..)) -> [#("status", meta.Int(status))]
-      Error(NotFound) -> [#("status", meta.Int(404))]
-      Error(_) -> []
-    }
-    let bytes = case req.method, result {
-      http.Get, Ok(res) -> bit_array.byte_size(res.body)
-      _, _ -> bit_array.byte_size(req.body)
-    }
-    tracer.Span(
-      source: "gloss.s3",
-      name: operation,
-      at:,
-      meta: list.flatten([
+  use <- tracer.span_result(
+    client.tracer,
+    source: "gloss.s3",
+    name: operation,
+    meta: fn(result: Result(Response(BitArray), Error)) {
+      let status = case result {
+        Ok(res) -> [#("status", meta.Int(res.status))]
+        Error(ServerError(status:, ..)) -> [#("status", meta.Int(status))]
+        Error(NotFound) -> [#("status", meta.Int(404))]
+        Error(_) -> []
+      }
+      let bytes = case req.method, result {
+        http.Get, Ok(res) -> bit_array.byte_size(res.body)
+        _, _ -> bit_array.byte_size(req.body)
+      }
+      list.flatten([
         [#("bucket", meta.String(bucket.name))],
         case key {
           Some(key) -> [#("key", meta.String(key))]
@@ -793,22 +784,21 @@ fn run(
         [#("bytes", meta.Int(bytes))],
         status,
         extra,
-      ]),
-      duration: elapsed,
-      error: case result {
-        Ok(_) -> None
+      ])
+    },
+    failure: fn(error) {
+      case error {
         // A missing object is an answer, not a failure of the request.
-        Error(NotFound) -> None
-        Error(error) -> Some(describe(error))
-      },
-      trace: case parent {
-        Some(parent) -> tracer.child(parent)
-        None -> tracer.root()
-      },
-      parent_span_id: option.map(parent, fn(parent) { parent.span_id }),
-    )
-  })
-  result
+        NotFound -> None
+        error -> Some(describe(error))
+      }
+    },
+  )
+  case client.send(signed) {
+    Error(reason) -> Error(Transport(reason))
+    Ok(res) if res.status >= 200 && res.status < 300 -> Ok(res)
+    Ok(res) -> Error(response_error(res))
+  }
 }
 
 fn response_error(res: Response(BitArray)) -> Error {
@@ -926,6 +916,3 @@ fn month_number(name: String) -> Result(Int, Nil) {
     _ -> Error(Nil)
   }
 }
-
-@external(erlang, "gloss@s3_ffi", "monotonic_ns")
-fn monotonic_ns() -> Int

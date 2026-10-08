@@ -37,14 +37,15 @@
 //// trace. A `Point` is a log record or span event: `level` is the severity,
 //// `meta` the attributes, and `trace` the span it happened in, if any.
 
+import gleam
 import gleam/bit_array
 import gleam/crypto
-import gleam/erlang/atom.{type Atom}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 import gleam/time/duration.{type Duration}
 import gleam/time/timestamp.{type Timestamp}
+import gloss/internal/runtime
 import gloss/meta.{type Meta}
 
 /// An ordered set of handlers. Build one with `new` and `handle`.
@@ -217,9 +218,9 @@ pub fn span(
         None -> root()
       }
       let at = timestamp.system_time()
-      let started = monotonic_ns()
+      let started = runtime.monotonic_ns()
       let result = with_current(trace, work)
-      let duration = duration.nanoseconds(monotonic_ns() - started)
+      let duration = duration.nanoseconds(runtime.monotonic_ns() - started)
       emit(tracer, fn() {
         Span(
           source:,
@@ -237,9 +238,57 @@ pub fn span(
   }
 }
 
-@external(erlang, "erlang", "monotonic_time")
-fn monotonic_time(unit: Atom) -> Int
-
-fn monotonic_ns() -> Int {
-  monotonic_time(atom.create("nanosecond"))
+/// Run `work` and emit a `Span` for it, as `span` does, for work that
+/// returns a `Result`. `meta` is given the result, and `failure` turns an
+/// `Error` into the span's error, or `None` for errors that aren't failures
+/// (a missing object, say).
+///
+/// ```gleam
+/// use <- tracer.span_result(
+///   tracer,
+///   source: "gloss.s3",
+///   name: "get_object",
+///   meta: fn(_) { [#("key", meta.String(key))] },
+///   failure: fn(error) { Some(describe(error)) },
+/// )
+/// send(request)
+/// ```
+pub fn span_result(
+  tracer: Tracer,
+  source source: String,
+  name name: String,
+  meta meta: fn(Result(a, e)) -> Meta,
+  failure failure: fn(e) -> Option(String),
+  work work: fn() -> Result(a, e),
+) -> Result(a, e) {
+  case enabled(tracer) {
+    False -> work()
+    True -> {
+      let parent = current()
+      let trace = case parent {
+        Some(parent) -> child(parent)
+        None -> root()
+      }
+      let at = timestamp.system_time()
+      let started = runtime.monotonic_ns()
+      let result = with_current(trace, work)
+      let duration = duration.nanoseconds(runtime.monotonic_ns() - started)
+      emit(tracer, fn() {
+        Span(
+          source:,
+          name:,
+          at:,
+          meta: meta(result),
+          duration:,
+          error: case result {
+            Ok(_) -> None
+            gleam.Error(error) -> failure(error)
+          },
+          trace:,
+          parent_span_id: option.map(parent, fn(parent) { parent.span_id }),
+        )
+      })
+      result
+    }
+  }
 }

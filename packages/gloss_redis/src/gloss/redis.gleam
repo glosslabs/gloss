@@ -43,7 +43,6 @@
 import gleam/bit_array
 import gleam/bytes_tree
 import gleam/dict.{type Dict}
-import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Name, type Subject}
 import gleam/int
 import gleam/list
@@ -53,7 +52,6 @@ import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import gleam/string
 import gleam/time/duration.{type Duration}
-import gleam/time/timestamp
 import gloss/internal/runtime
 import gloss/meta
 import gloss/redis/internal/connection
@@ -972,44 +970,15 @@ fn traced(
   meta: fn() -> meta.Meta,
   work: fn() -> Result(a, Error),
 ) -> Result(a, Error) {
-  case tracer.enabled(pool.tracer) {
-    False -> work()
-    True -> {
-      let parent = tracer.current()
-      let trace = case parent {
-        Some(parent) -> tracer.child(parent)
-        None -> tracer.root()
-      }
-      let at = timestamp.system_time()
-      let started = monotonic_time(nanosecond())
-      let outcome = work()
-      let elapsed = duration.nanoseconds(monotonic_time(nanosecond()) - started)
-      tracer.emit(pool.tracer, fn() {
-        tracer.Span(
-          source: "gloss.redis",
-          name:,
-          at:,
-          meta: meta(),
-          duration: elapsed,
-          error: case outcome {
-            Ok(_) -> None
-            Error(error) -> Some(describe(error))
-          },
-          trace:,
-          parent_span_id: option.map(parent, fn(p) { p.span_id }),
-        )
-      })
-      outcome
-    }
-  }
+  tracer.span_result(
+    pool.tracer,
+    source: "gloss.redis",
+    name:,
+    meta: fn(_) { meta() },
+    failure: fn(error) { Some(describe(error)) },
+    work:,
+  )
 }
-
-fn nanosecond() -> Atom {
-  atom.create("nanosecond")
-}
-
-@external(erlang, "erlang", "monotonic_time")
-fn monotonic_time(unit: Atom) -> Int
 
 @external(erlang, "gloss@redis_ffi", "counter_new")
 fn counter_new() -> Counter

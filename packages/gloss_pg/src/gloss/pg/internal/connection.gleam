@@ -5,13 +5,13 @@ import gleam/bit_array
 import gleam/bytes_tree.{type BytesTree}
 import gleam/crypto
 import gleam/dynamic.{type Dynamic}
-import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Pid}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import gloss/internal/runtime
 import gloss/internal/socket as tcp
 import gloss/internal/statement_cache
 import gloss/pg/internal/protocol.{type Message}
@@ -736,8 +736,5 @@ pub fn server_error(fields: List(#(String, String))) -> sql.Error {
 }
 
 fn now_ms() -> Int {
-  monotonic_time(atom.create("millisecond"))
+  runtime.monotonic_ms()
 }
-
-@external(erlang, "erlang", "monotonic_time")
-fn monotonic_time(unit: Atom) -> Int

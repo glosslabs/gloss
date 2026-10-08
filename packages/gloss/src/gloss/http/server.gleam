@@ -67,7 +67,6 @@
 
 import gleam/bytes_tree.{type BytesTree}
 import gleam/dict
-import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process
 import gleam/http
 import gleam/http/request
@@ -90,6 +89,7 @@ import gloss/internal/http_forwarded as forwarded
 import gloss/internal/http_reply_render.{type Wire} as reply_render
 import gloss/internal/http_server_connection as connection
 import gloss/internal/http_server_control as control
+import gloss/internal/runtime
 import gloss/logger.{type Logger}
 import gloss/meta
 import gloss/tracer.{type Tracer}
@@ -856,11 +856,8 @@ fn ms(duration: Duration) -> Int {
 }
 
 fn monotonic_ns() -> Int {
-  monotonic_time(atom.create("nanosecond"))
+  runtime.monotonic_ns()
 }
-
-@external(erlang, "erlang", "monotonic_time")
-fn monotonic_time(unit: Atom) -> Int
 
 @external(erlang, "gloss@http@server_ffi", "rescue")
 fn rescue(work: fn() -> a) -> Result(a, String)

@@ -11,6 +11,10 @@ pub fn try_send(subject: Subject(message), message: message) -> Bool
 @external(erlang, "gloss@internal@runtime_ffi", "monotonic_ns")
 pub fn monotonic_ns() -> Int
 
+/// A monotonic clock in milliseconds, for deadlines.
+@external(erlang, "gloss@internal@runtime_ffi", "monotonic_ms")
+pub fn monotonic_ms() -> Int
+
 /// PBKDF2 with HMAC-SHA256: `length` bytes derived from `password`.
 @external(erlang, "gloss@internal@runtime_ffi", "pbkdf2_sha256")
 pub fn pbkdf2_sha256(

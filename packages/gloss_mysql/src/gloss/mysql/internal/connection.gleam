@@ -2,13 +2,13 @@
 //// running statements over the binary (prepared) and text protocols.
 
 import gleam/bit_array
-import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Pid}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import gloss/internal/runtime
 import gloss/internal/socket as tcp
 import gloss/internal/statement_cache
 import gloss/mysql/internal/auth
@@ -817,11 +817,8 @@ fn unqualify(name: String) -> String {
 }
 
 fn now_ms() -> Int {
-  monotonic_time(atom.create("millisecond"))
+  runtime.monotonic_ms()
 }
-
-@external(erlang, "erlang", "monotonic_time")
-fn monotonic_time(unit: Atom) -> Int
 
 @external(erlang, "gloss@mysql_ffi", "rsa_encrypt")
 fn ffi_rsa_encrypt(pem: BitArray, data: BitArray) -> Result(BitArray, Nil)
