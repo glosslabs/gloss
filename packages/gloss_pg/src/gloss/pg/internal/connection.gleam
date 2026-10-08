@@ -12,10 +12,10 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
-import gloss/pg/internal/codec
 import gloss/pg/internal/protocol.{type Message}
 import gloss/pg/internal/scram
 import gloss/sql
+import gloss/sql/internal/postgres as codec
 
 pub type Socket
 
@@ -732,18 +732,7 @@ fn unexpected(message: Message) -> sql.Error {
 
 /// Map an ErrorResponse onto `sql.Error`, by SQLSTATE.
 pub fn server_error(fields: List(#(String, String))) -> sql.Error {
-  let field = fn(code) { list.key_find(fields, code) |> result.unwrap("") }
-  let message = field("M")
-  case field("C"), field("V") {
-    "23505", _ -> sql.UniqueViolation(constraint: field("n"), message:)
-    "23503", _ -> sql.ForeignKeyViolation(constraint: field("n"), message:)
-    "23502", _ -> sql.NotNullViolation(column: field("c"), message:)
-    "23514", _ -> sql.CheckViolation(constraint: field("n"), message:)
-    // Authentication failures and the like end the connection.
-    "28" <> _, _ | "08" <> _, _ -> sql.ConnectionFailed(message)
-    _, "FATAL" | _, "PANIC" -> sql.ConnectionLost(message)
-    code, _ -> sql.QueryFailed(code:, message:)
-  }
+  codec.server_error(fields)
 }
 
 fn now_ms() -> Int {

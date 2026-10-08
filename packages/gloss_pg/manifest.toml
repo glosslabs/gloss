@@ -27,3 +27,4 @@ gleam_stdlib = { version = ">= 1.0.5 and < 2.0.0" }
 gleam_time = { version = ">= 1.11.0 and < 2.0.0" }
 gleeunit = { version = ">= 1.11.0 and < 2.0.0" }
 gloss = { path = "../gloss" }
+gloss_sql = { path = "../gloss_sql" }

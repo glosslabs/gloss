@@ -6,6 +6,7 @@ description = "A server-rendered forum built with gloss and Lustre"
 extra_applications = ["crypto"]
 
 [dependencies]
+gloss_sql = { path = "../../packages/gloss_sql" }
 gloss = { path = "../../packages/gloss" }
 gloss_sentry = { path = "../../packages/gloss_sentry" }
 gloss_otel = { path = "../../packages/gloss_otel" }

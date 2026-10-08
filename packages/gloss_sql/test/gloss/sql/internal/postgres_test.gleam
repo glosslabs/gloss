@@ -1,8 +1,8 @@
 import gleam/option.{None, Some}
 import gleam/time/calendar
 import gleam/time/timestamp
-import gloss/pg/internal/codec
 import gloss/sql
+import gloss/sql/internal/postgres as codec
 
 fn decode(oid: Int, text: String) -> sql.Value {
   codec.decode(oid, <<text:utf8>>)

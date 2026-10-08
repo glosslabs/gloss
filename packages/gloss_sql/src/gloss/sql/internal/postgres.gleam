@@ -1,4 +1,6 @@
-//// Converting between `sql.Value`s and Postgres's text format.
+//// Converting between `sql.Value`s and Postgres's text format, and
+//// Postgres errors to `sql.Error`s, shared by `gloss/pg` on the BEAM and
+//// `gloss/pglite` in JavaScript so both read values the same way.
 ////
 //// Arguments are sent as text, except `Bytes`, which is sent as binary, and
 //// the server works out each one's type from the statement. Result columns
@@ -363,5 +365,25 @@ fn unquoted(text: String, acc: String) -> #(String, String) {
   case string.pop_grapheme(text) {
     Ok(#(",", _)) | Ok(#("}", _)) | Error(Nil) -> #(acc, text)
     Ok(#(grapheme, rest)) -> unquoted(rest, acc <> grapheme)
+  }
+}
+
+// --- Errors ------------------------------------------------------------------
+
+/// The error for a server error's fields, keyed by their protocol codes:
+/// `C` the SQLSTATE, `M` the message, `V` the severity, `n` the constraint
+/// and `c` the column.
+pub fn server_error(fields: List(#(String, String))) -> sql.Error {
+  let field = fn(code) { list.key_find(fields, code) |> result.unwrap("") }
+  let message = field("M")
+  case field("C"), field("V") {
+    "23505", _ -> sql.UniqueViolation(constraint: field("n"), message:)
+    "23503", _ -> sql.ForeignKeyViolation(constraint: field("n"), message:)
+    "23502", _ -> sql.NotNullViolation(column: field("c"), message:)
+    "23514", _ -> sql.CheckViolation(constraint: field("n"), message:)
+    // Authentication failures and the like end the connection.
+    "28" <> _, _ | "08" <> _, _ -> sql.ConnectionFailed(message)
+    _, "FATAL" | _, "PANIC" -> sql.ConnectionLost(message)
+    code, _ -> sql.QueryFailed(code:, message:)
   }
 }

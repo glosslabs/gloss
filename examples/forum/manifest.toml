@@ -20,7 +20,7 @@ packages = [
   { name = "gleeunit", version = "1.11.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleeunit", source = "hex", outer_checksum = "EC31ABA74256AEA531EDF8169931D775BBB384FED0A8A1BDC4DD9354E3E21826" },
   { name = "gloss", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_erlang", "gleam_http", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss_sql"], source = "local", path = "../../packages/gloss" },
   { name = "gloss_otel", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_http", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss"], source = "local", path = "../../packages/gloss_otel" },
-  { name = "gloss_pg", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_erlang", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss"], source = "local", path = "../../packages/gloss_pg" },
+  { name = "gloss_pg", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_erlang", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss", "gloss_sql"], source = "local", path = "../../packages/gloss_pg" },
   { name = "gloss_sentry", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_erlang", "gleam_http", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss"], source = "local", path = "../../packages/gloss_sentry" },
   { name = "gloss_sql", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib", "gleam_time"], source = "local", path = "../../packages/gloss_sql" },
   { name = "gloss_test", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_http", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss"], source = "local", path = "../../packages/gloss_test" },
@@ -41,5 +41,6 @@ gloss = { path = "../../packages/gloss" }
 gloss_otel = { path = "../../packages/gloss_otel" }
 gloss_pg = { path = "../../packages/gloss_pg" }
 gloss_sentry = { path = "../../packages/gloss_sentry" }
+gloss_sql = { path = "../../packages/gloss_sql" }
 gloss_test = { path = "../../packages/gloss_test" }
 lustre = { version = ">= 5.7.1 and < 6.0.0" }

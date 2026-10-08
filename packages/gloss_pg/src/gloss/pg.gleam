@@ -85,10 +85,10 @@ import gleam/result
 import gleam/string
 import gleam/time/duration.{type Duration}
 import gleam/uri
-import gloss/pg/internal/codec
 import gloss/pg/internal/connection.{type PgConnection}
 import gloss/pg/internal/listener_process
 import gloss/sql
+import gloss/sql/internal/postgres as codec
 import gloss/sql/pool
 
 /// Where and how to connect. Build one with `new` or `from_url` and the
