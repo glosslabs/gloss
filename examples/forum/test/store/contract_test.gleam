@@ -5,7 +5,6 @@ import app/db
 import domain/accounts/user_store.{Inserted, NewUser}
 import envoy
 import gleam/time/timestamp
-import gloss/sql
 import gloss/sql/pool
 import gloss/tracer
 import store/threads as postgres_threads
