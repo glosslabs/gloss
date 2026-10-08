@@ -61,7 +61,10 @@ fn get_many(db: pool.Db, ids: List(Int)) -> Result(List(User), sql.Error) {
   |> pool.all(db, _)
 }
 
-fn find_by_email(db: pool.Db, email: String) -> Result(Option(User), sql.Error) {
+fn find_by_email(
+  db: pool.Db,
+  email: String,
+) -> Result(Option(User), sql.Error) {
   select("where email = $1")
   |> sql.bind(sql.Text(email))
   |> sql.label("users.find_by_email")
