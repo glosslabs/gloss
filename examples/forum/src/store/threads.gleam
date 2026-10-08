@@ -11,11 +11,12 @@ import gleam/option.{type Option, None}
 import gleam/result
 import gleam/time/timestamp.{type Timestamp}
 import gloss/sql
+import gloss/sql/pool
 import gloss/store.{type Store}
 
 /// The store. It answers in the calling process, so the caller borrows the
 /// pool connection and results are never copied between processes.
-pub fn new(db: sql.Db) -> Store(Message) {
+pub fn new(db: pool.Db) -> Store(Message) {
   store.inline(fn(message) {
     case message {
       Open(thread:, reply:) -> open(db, thread) |> store.reply(reply)
@@ -27,9 +28,9 @@ pub fn new(db: sql.Db) -> Store(Message) {
   })
 }
 
-fn open(db: sql.Db, new: NewThread) -> Result(Thread, sql.Error) {
+fn open(db: pool.Db, new: NewThread) -> Result(Thread, sql.Error) {
   use id <- result.try(
-    sql.transaction(db, fn(tx) {
+    pool.transaction(db, fn(tx) {
       use id <- result.try(
         sql.query(
           "insert into threads (title, last_activity) values ($1, $2)
@@ -39,7 +40,7 @@ fn open(db: sql.Db, new: NewThread) -> Result(Thread, sql.Error) {
         |> sql.bind(sql.Timestamp(new.at))
         |> sql.returning(decode.at([0], decode.int))
         |> sql.label("threads.open")
-        |> sql.one(tx, _),
+        |> pool.one(tx, _),
       )
       use _ <- result.map(insert_post(tx, id, new.author_id, new.body, new.at))
       id
@@ -49,15 +50,15 @@ fn open(db: sql.Db, new: NewThread) -> Result(Thread, sql.Error) {
   get(db, id) |> result.try(option.to_result(_, sql.NotFound))
 }
 
-fn add_post(db: sql.Db, new: NewPost) -> Result(Option(Thread), sql.Error) {
+fn add_post(db: pool.Db, new: NewPost) -> Result(Option(Thread), sql.Error) {
   let added =
-    sql.transaction(db, fn(tx) {
+    pool.transaction(db, fn(tx) {
       use touched <- result.try(
         sql.query("update threads set last_activity = $2 where id = $1")
         |> sql.bind(sql.Int(new.thread_id))
         |> sql.bind(sql.Timestamp(new.at))
         |> sql.label("threads.touch")
-        |> sql.exec(tx, _),
+        |> pool.exec(tx, _),
       )
       case touched {
         0 -> Ok(False)
@@ -74,7 +75,7 @@ fn add_post(db: sql.Db, new: NewPost) -> Result(Option(Thread), sql.Error) {
 }
 
 fn insert_post(
-  tx: sql.Db,
+  tx: pool.Db,
   thread_id: Int,
   author_id: Int,
   body: String,
@@ -88,10 +89,10 @@ fn insert_post(
   |> sql.bind(sql.Text(body))
   |> sql.bind(sql.Timestamp(at))
   |> sql.label("posts.insert")
-  |> sql.exec(tx, _)
+  |> pool.exec(tx, _)
 }
 
-fn get(db: sql.Db, id: Int) -> Result(Option(Thread), sql.Error) {
+fn get(db: pool.Db, id: Int) -> Result(Option(Thread), sql.Error) {
   select_threads("where id = $1")
   |> sql.bind(sql.Int(id))
   |> sql.label("threads.get")
@@ -100,7 +101,7 @@ fn get(db: sql.Db, id: Int) -> Result(Option(Thread), sql.Error) {
 }
 
 fn recent(
-  db: sql.Db,
+  db: pool.Db,
   offset: Int,
   limit: Int,
 ) -> Result(List(Thread), sql.Error) {
@@ -128,10 +129,10 @@ fn select_threads(rest: String) -> sql.Statement(Row) {
 
 /// Run the thread query, then load every thread's posts in one more query.
 fn with_posts(
-  db: sql.Db,
+  db: pool.Db,
   threads: sql.Statement(Row),
 ) -> Result(List(Thread), sql.Error) {
-  use rows <- result.try(sql.all(db, threads))
+  use rows <- result.try(pool.all(db, threads))
   use posts <- result.map(case rows {
     [] -> Ok([])
     _ ->
@@ -151,7 +152,7 @@ fn with_posts(
         decode.success(#(thread_id, Post(id:, author_id:, body:, at:)))
       })
       |> sql.label("posts.for_threads")
-      |> sql.all(db, _)
+      |> pool.all(db, _)
   })
   let by_thread = list.group(posts, fn(pair) { pair.0 })
   list.map(rows, fn(row) {

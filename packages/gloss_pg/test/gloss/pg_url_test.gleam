@@ -1,6 +1,7 @@
 import gleam/erlang/process
 import gloss/pg
 import gloss/sql
+import gloss/sql/pool
 
 pub fn rejects_other_schemes_test() {
   assert pg.from_url("mysql://localhost/db") == Error(Nil)
@@ -25,10 +26,10 @@ pub fn reads_every_part_of_a_url_test() {
 
 pub fn an_unreachable_server_fails_to_connect_test() {
   let assert Ok(db) =
-    sql.new(pg.driver(pg.new() |> pg.host("127.0.0.1") |> pg.port(1)))
-    |> sql.start
+    pool.new(pg.driver(pg.new() |> pg.host("127.0.0.1") |> pg.port(1)))
+    |> pool.start
   let assert Error(sql.ConnectionFailed(_)) =
-    sql.exec(db, sql.query("select 1"))
-  sql.shutdown(db)
+    pool.exec(db, sql.query("select 1"))
+  pool.shutdown(db)
   process.sleep(10)
 }

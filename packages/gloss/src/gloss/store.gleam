@@ -20,8 +20,8 @@
 //// // In an adapter: answering from Postgres.
 //// store.inline(fn(message) {
 ////   case message {
-////     Get(id:, reply:) -> sql.optional(db, select(id)) |> store.reply(reply)
-////     Save(user:, reply:) -> sql.exec(db, update(user)) |> store.reply(reply)
+////     Get(id:, reply:) -> pool.optional(db, select(id)) |> store.reply(reply)
+////     Save(user:, reply:) -> pool.exec(db, update(user)) |> store.reply(reply)
 ////   }
 //// })
 //// ```
@@ -32,7 +32,7 @@
 //// own: nothing is copied between processes and nothing needs starting. It
 //// suits a store over a database, whose pool already runs statements
 //// concurrently; the answering function captures what it needs, such as a
-//// `sql.Db`. A `serial` store is a process that answers one message at a
+//// `pool.Db`. A `serial` store is a process that answers one message at a
 //// time and keeps state between them, which suits a store held in memory.
 ////
 //// ## Failure

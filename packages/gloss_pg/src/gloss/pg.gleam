@@ -2,7 +2,7 @@
 ////
 //// ```gleam
 //// let assert Ok(config) = pg.from_url("postgres://app:secret@db:5432/app")
-//// let assert Ok(db) = sql.new(pg.driver(config)) |> sql.start
+//// let assert Ok(db) = pool.new(pg.driver(config)) |> pool.start
 //// ```
 ////
 //// Placeholders are `$1`, `$2`, ... Each argument is sent as text (bytes as
@@ -59,7 +59,7 @@
 //// let assert Ok(listener) = pg.start_listener(config)
 //// let jobs = process.new_subject()
 //// let assert Ok(Nil) = pg.listen(listener, "jobs", jobs)
-//// let assert Ok(Nil) = sql.exec(db, pg.notify("jobs", "42"))
+//// let assert Ok(Nil) = pool.exec(db, pg.notify("jobs", "42"))
 //// let assert Ok(pg.Notification(channel: "jobs", payload: "42", ..)) =
 ////   process.receive(jobs, 1000)
 //// ```
@@ -89,9 +89,10 @@ import gloss/pg/internal/codec
 import gloss/pg/internal/connection.{type PgConnection}
 import gloss/pg/internal/listener_process
 import gloss/sql
+import gloss/sql/pool
 
 /// Where and how to connect. Build one with `new` or `from_url` and the
-/// setters, then give `driver(config)` to `sql.new`.
+/// setters, then give `driver(config)` to `pool.new`.
 pub opaque type Config {
   Config(
     host: String,
@@ -254,10 +255,10 @@ pub fn statement_cache(config: Config, size: Int) -> Config {
   Config(..config, statement_cache: int.max(size, 0))
 }
 
-/// The driver to give to `sql.new`.
-pub fn driver(config: Config) -> sql.Driver {
+/// The driver to give to `pool.new`.
+pub fn driver(config: Config) -> pool.Driver {
   let settings = settings(config)
-  sql.Driver(
+  pool.Driver(
     name: "postgres",
     placeholder: fn(n) { "$" <> int.to_string(n) },
     connect: fn() {
@@ -265,7 +266,7 @@ pub fn driver(config: Config) -> sql.Driver {
         settings,
         config.statement_cache,
       ))
-      sql.Connection(
+      pool.Connection(
         run: fn(text, args, timeout) {
           connection.run(connection, text, args, timeout)
         },
@@ -312,7 +313,7 @@ fn fixed(name: String) -> Bool {
 
 // --- NOTIFY ------------------------------------------------------------------
 
-/// Send `payload` to every listener on `channel`. Run it with `sql.exec`;
+/// Send `payload` to every listener on `channel`. Run it with `pool.exec`;
 /// in a transaction it is delivered when the transaction commits.
 pub fn notify(channel: String, payload: String) -> sql.Statement(Dynamic) {
   sql.query("select pg_notify($1, $2)")
@@ -413,7 +414,7 @@ pub fn stop_listener(listener: Listener) -> Nil {
 /// ])
 /// ```
 pub fn copy_in(
-  db: sql.Db,
+  db: pool.Db,
   sql: String,
   chunks: List(BitArray),
 ) -> Result(Int, sql.Error) {
@@ -428,12 +429,12 @@ pub fn copy_in(
 /// `copy_in` for data too large to hold at once: `next` makes each chunk
 /// from `state` as it is needed, and `None` ends the copy.
 pub fn copy_in_with(
-  db: sql.Db,
+  db: pool.Db,
   sql: String,
   from state: s,
   next next: fn(s) -> Option(#(BitArray, s)),
 ) -> Result(Int, sql.Error) {
-  use connection, timeout <- sql.borrow(db, "copy_in")
+  use connection, timeout <- pool.borrow(db, "copy_in")
   use connection <- result.try(from_raw(connection))
   connection.copy_in(connection, sql, state, next, timeout)
 }
@@ -441,12 +442,12 @@ pub fn copy_in_with(
 /// Run `COPY ... TO STDOUT`, folding each chunk Postgres sends into `acc`.
 /// In the text and CSV formats each chunk is one row, ending in a newline.
 pub fn copy_out(
-  db: sql.Db,
+  db: pool.Db,
   sql: String,
   from acc: a,
   with fold: fn(a, BitArray) -> a,
 ) -> Result(a, sql.Error) {
-  use connection, timeout <- sql.borrow(db, "copy_out")
+  use connection, timeout <- pool.borrow(db, "copy_out")
   use connection <- result.try(from_raw(connection))
   connection.copy_out(connection, sql, acc, fold, timeout)
 }
@@ -469,7 +470,7 @@ pub fn copy_row(values: List(sql.Value)) -> BitArray {
   <<string.join(fields, "\t"):utf8, "\n":utf8>>
 }
 
-fn from_raw(connection: sql.Connection) -> Result(PgConnection, sql.Error) {
+fn from_raw(connection: pool.Connection) -> Result(PgConnection, sql.Error) {
   ffi_connection(connection.raw)
   |> result.replace_error(sql.QueryFailed(
     code: "",

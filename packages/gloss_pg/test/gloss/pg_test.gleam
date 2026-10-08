@@ -11,28 +11,29 @@ import gleam/time/duration
 import gleam/time/timestamp
 import gloss/pg
 import gloss/sql
+import gloss/sql/pool
 
-fn with_db(size: Int, test_: fn(sql.Db) -> Nil) -> Nil {
+fn with_db(size: Int, test_: fn(pool.Db) -> Nil) -> Nil {
   case getenv("GLOSS_TEST_PG_URL") {
     Error(Nil) -> Nil
     Ok(url) -> {
       let assert Ok(config) = pg.from_url(url)
       let assert Ok(db) =
-        sql.new(pg.driver(config))
-        |> sql.pool_size(size)
-        |> sql.query_timeout(duration.milliseconds(500))
-        |> sql.start
+        pool.new(pg.driver(config))
+        |> pool.size(size)
+        |> pool.query_timeout(duration.milliseconds(500))
+        |> pool.start
       test_(db)
-      sql.shutdown(db)
+      pool.shutdown(db)
     }
   }
 }
 
-fn count(db: sql.Db, table: String) -> Int {
+fn count(db: pool.Db, table: String) -> Int {
   let assert Ok(n) =
     sql.query("select count(*) from " <> table)
     |> sql.returning(decode.at([0], decode.int))
-    |> sql.one(db, _)
+    |> pool.one(db, _)
   n
 }
 
@@ -63,7 +64,7 @@ pub fn reads_column_types_test() {
               null::text, 12.50::numeric",
     )
     |> sql.returning(row)
-    |> sql.one(db, _)
+    |> pool.one(db, _)
   assert values
     == #(
       #(9_000_000_000, 1.5, True, "héllo", <<0, 255>>),
@@ -113,7 +114,7 @@ pub fn round_trips_arguments_test() {
       use null <- decode.field(8, decode.optional(decode.int))
       decode.success(#(text, int, bool, at, bytes, array, float, null))
     })
-    |> sql.one(db, _)
+    |> pool.one(db, _)
   assert row
     == #(
       "it's \"quoted\"",
@@ -130,7 +131,7 @@ pub fn round_trips_arguments_test() {
 pub fn maps_constraint_errors_test() {
   use db <- with_db(1)
   let assert Ok(Nil) =
-    sql.script(
+    pool.script(
       db,
       "create temp table people (
          id serial primary key,
@@ -143,7 +144,7 @@ pub fn maps_constraint_errors_test() {
     sql.query("insert into people (email, age) values ($1, $2)")
     |> sql.bind(email)
     |> sql.bind(age)
-    |> sql.exec(db, _)
+    |> pool.exec(db, _)
   }
   let assert Error(sql.UniqueViolation(constraint: "people_email_key", ..)) =
     insert(sql.Text("a@x"), sql.Null)
@@ -152,39 +153,39 @@ pub fn maps_constraint_errors_test() {
   let assert Error(sql.CheckViolation(constraint: "people_age_check", ..)) =
     insert(sql.Text("b@x"), sql.Int(-1))
   assert insert(sql.Text("b@x"), sql.Int(3)) == Ok(1)
-  assert sql.exec(db, sql.query("update people set age = 1")) == Ok(2)
+  assert pool.exec(db, sql.query("update people set age = 1")) == Ok(2)
 }
 
 pub fn a_failed_statement_leaves_the_connection_usable_test() {
   use db <- with_db(1)
   let assert Error(sql.QueryFailed(code: "42601", ..)) =
-    sql.exec(db, sql.query("selec 1"))
+    pool.exec(db, sql.query("selec 1"))
   let assert Error(sql.QueryFailed(code: "42P01", ..)) =
-    sql.exec(db, sql.query("select * from no_such_table"))
-  assert sql.exec(db, sql.query("select 1")) == Ok(1)
+    pool.exec(db, sql.query("select * from no_such_table"))
+  assert pool.exec(db, sql.query("select 1")) == Ok(1)
 }
 
 pub fn transactions_commit_and_roll_back_test() {
   use db <- with_db(1)
-  let assert Ok(Nil) = sql.script(db, "create temp table items (name text)")
+  let assert Ok(Nil) = pool.script(db, "create temp table items (name text)")
   let add = fn(db, name) {
     sql.query("insert into items values ($1)")
     |> sql.bind(sql.Text(name))
-    |> sql.exec(db, _)
+    |> pool.exec(db, _)
   }
 
   let assert Error(sql.RolledBack("no")) =
-    sql.transaction(db, fn(tx) {
+    pool.transaction(db, fn(tx) {
       let _ = add(tx, "dropped")
       Error("no")
     })
   assert count(db, "items") == 0
 
   let assert Ok(Nil) =
-    sql.transaction(db, fn(tx) {
+    pool.transaction(db, fn(tx) {
       let _ = add(tx, "kept")
       let _ =
-        sql.transaction(tx, fn(inner) {
+        pool.transaction(tx, fn(inner) {
           let _ = add(inner, "undone")
           Error(Nil)
         })
@@ -195,9 +196,9 @@ pub fn transactions_commit_and_roll_back_test() {
 
 pub fn a_slow_statement_times_out_test() {
   use db <- with_db(1)
-  assert sql.exec(db, sql.query("select pg_sleep(2)"))
+  assert pool.exec(db, sql.query("select pg_sleep(2)"))
     == Error(sql.QueryTimeout)
-  assert sql.exec(db, sql.query("select 1")) == Ok(1)
+  assert pool.exec(db, sql.query("select 1")) == Ok(1)
 }
 
 pub fn a_timeout_inside_a_transaction_breaks_the_connection_test() {
@@ -205,15 +206,15 @@ pub fn a_timeout_inside_a_transaction_breaks_the_connection_test() {
   let select_42 =
     sql.query("select 42") |> sql.returning(decode.at([0], decode.int))
   let assert Error(sql.RolledBack(sql.ConnectionLost(_))) =
-    sql.transaction(db, fn(tx) {
+    pool.transaction(db, fn(tx) {
       let assert Error(sql.QueryTimeout) =
-        sql.exec(tx, sql.query("select pg_sleep(0.7)"))
+        pool.exec(tx, sql.query("select pg_sleep(0.7)"))
       // pg_sleep's replies are still coming. Reading them as this
       // statement's would return the wrong rows.
       process.sleep(300)
-      sql.one(tx, select_42)
+      pool.one(tx, select_42)
     })
-  assert sql.one(db, select_42) == Ok(42)
+  assert pool.one(db, select_42) == Ok(42)
 }
 
 pub fn serves_concurrent_callers_test() {
@@ -226,7 +227,7 @@ pub fn serves_concurrent_callers_test() {
         sql.query("select $1::int * 2")
         |> sql.bind(sql.Int(i))
         |> sql.returning(decode.at([0], decode.int))
-        |> sql.one(db, _)
+        |> pool.one(db, _)
       process.send(results, result)
     })
   })
@@ -245,10 +246,10 @@ pub fn a_wrong_password_fails_to_connect_test() {
     Error(Nil) -> Nil
     Ok(config) -> {
       let assert Ok(db) =
-        sql.new(pg.driver(pg.password(config, "wrong"))) |> sql.start
+        pool.new(pg.driver(pg.password(config, "wrong"))) |> pool.start
       let assert Error(sql.ConnectionFailed(_)) =
-        sql.exec(db, sql.query("select 1"))
-      sql.shutdown(db)
+        pool.exec(db, sql.query("select 1"))
+      pool.shutdown(db)
     }
   }
 }
@@ -266,28 +267,28 @@ pub fn connects_over_tls_test() {
     Ok(_), Ok(url) -> {
       let assert Ok(config) = pg.from_url(url <> "?sslmode=require")
       let assert Ok(db) =
-        sql.new(pg.driver(config)) |> sql.pool_size(2) |> sql.start
+        pool.new(pg.driver(config)) |> pool.size(2) |> pool.start
       // Statements run in the calling process while the pool owns the
       // TLS socket; run several so connections are reused.
       list.each(one_to(5), fn(_) {
         let assert Ok(True) =
           sql.query("select ssl from pg_stat_ssl where pid = pg_backend_pid()")
           |> sql.returning(decode.at([0], decode.bool))
-          |> sql.one(db, _)
+          |> pool.one(db, _)
       })
       // The listener's socket runs in active mode over TLS.
       let assert Ok(listener) = pg.start_listener(config)
       let inbox = process.new_subject()
       let assert Ok(Nil) = pg.listen(listener, "tls", inbox)
-      let assert Ok(1) = sql.exec(db, pg.notify("tls", "secure"))
+      let assert Ok(1) = pool.exec(db, pg.notify("tls", "secure"))
       let assert Ok(pg.Notification(payload: "secure", ..)) =
         process.receive(inbox, 2000)
       pg.stop_listener(listener)
       // A self-signed certificate fails verification.
       let assert Ok(db) =
-        sql.new(pg.driver(pg.ssl(config, pg.SslVerified))) |> sql.start
+        pool.new(pg.driver(pg.ssl(config, pg.SslVerified))) |> pool.start
       let assert Error(sql.ConnectionFailed(_)) =
-        sql.exec(db, sql.query("select 1"))
+        pool.exec(db, sql.query("select 1"))
       Nil
     }
     _, _ -> Nil

@@ -1,15 +1,16 @@
 # gloss_pg
 
-A Postgres driver for [`gloss/sql`](../gloss), imported as `gloss/pg`. It
+A Postgres driver for [`gloss/sql/pool`](../gloss), imported as `gloss/pg`. It
 speaks the Postgres wire protocol directly over `gen_tcp`, with no
 dependencies beyond `gloss` and the gleam-lang packages.
 
 ```gleam
 import gloss/pg
 import gloss/sql
+import gloss/sql/pool
 
 let assert Ok(config) = pg.from_url("postgres://app:secret@localhost/app")
-let assert Ok(db) = sql.new(pg.driver(config)) |> sql.pool_size(10) |> sql.start
+let assert Ok(db) = pool.new(pg.driver(config)) |> pool.size(10) |> pool.start
 ```
 
 It supports SCRAM-SHA-256, MD5 and cleartext passwords, and TLS
@@ -34,7 +35,7 @@ pg.copy_out(db, "copy items to stdout", from: [], with: fn(rows, row) { [row, ..
 // LISTEN/NOTIFY: a listener has its own connection and reconnects on loss
 let assert Ok(listener) = pg.start_listener(config)
 let assert Ok(Nil) = pg.listen(listener, "jobs", subject)
-sql.exec(db, pg.notify("jobs", "42"))   // subject gets pg.Notification(..)
+pool.exec(db, pg.notify("jobs", "42"))   // subject gets pg.Notification(..)
 ```
 
 The tests that need a server run when `GLOSS_TEST_PG_URL` is set, e.g.

@@ -8,7 +8,7 @@ gleam-lang packages.
 |---|---|
 | `gloss/http/*` | HTTP/1.1 server, router, request context, replies and body decoding |
 | `gloss/store` | Stores: processes that answer an application's storage messages, concurrently (a database) or one at a time (memory) |
-| `gloss/sql` | Statements, row decoding, transactions and a connection pool, shared by every database driver |
+| `gloss/sql/pool` | Running `gloss/sql` statements on the BEAM: a connection pool from a driver, transactions, tracing (statements, values and errors are in the [`gloss_sql`](../gloss_sql) package) |
 | `gloss/tracer` | Spans and points, delivered to handlers you attach; a per-process current span (`current`, `with_current`) that requests set so their queries join their trace |
 | `gloss/logger` | Structured logging with channels (`stdout`, `stderr`, `otp`, `memory`, …), `min_level`/`max_level` to split them |
 | `gloss/logger/file` | A log channel that appends to a file and rotates it by size |
@@ -163,22 +163,24 @@ for HTTP/1.1), and upgraded to WebSockets with `gloss/http/websocket`.
 
 ## Database
 
-`gloss/sql` is the database API: one `Db` handle, statements with typed
-row decoders, transactions and a connection pool. A driver does the
-database-specific work: `gloss/pg`, from the [`gloss_pg`](../gloss_pg)
-package, is the first.
+Statements, values and errors come from `gloss/sql` in the
+[`gloss_sql`](../gloss_sql) package, which browser drivers share.
+`gloss/sql/pool` runs them on the BEAM: one `Db` handle, transactions and a
+connection pool. A driver does the database-specific work: `gloss/pg`, from
+the [`gloss_pg`](../gloss_pg) package, is the first.
 
 ```gleam
 import gleam/dynamic/decode
 import gloss/pg
 import gloss/sql
+import gloss/sql/pool
 
 let assert Ok(config) = pg.from_url("postgres://app:secret@localhost/app")
 let assert Ok(db) =
-  sql.new(pg.driver(config))
-  |> sql.pool_size(10)
-  |> sql.tracer(tracer)
-  |> sql.start
+  pool.new(pg.driver(config))
+  |> pool.size(10)
+  |> pool.tracer(tracer)
+  |> pool.start
 
 let user = {
   use id <- decode.field(0, decode.int)
@@ -189,12 +191,12 @@ let user = {
 sql.query("select id, email from users where id = $1")
 |> sql.bind(sql.Int(id))
 |> sql.returning(user)
-|> sql.one(db, _)
+|> pool.one(db, _)
 ```
 
-`sql.all`, `sql.one`, `sql.optional` and `sql.exec` run a statement for
+`pool.all`, `pool.one`, `pool.optional` and `pool.exec` run a statement for
 its rows, its only row, an optional row, or the count of affected rows.
-`sql.script` runs SQL text holding several statements, such as a schema.
+`pool.script` runs SQL text holding several statements, such as a schema.
 Statements can also be built from parts, with placeholders numbered for
 you:
 
@@ -207,7 +209,7 @@ sql.query("select id, email from users where deleted_at is null")
 |> sql.arg(sql.Int(limit))
 ```
 
-`sql.transaction(db, fn(tx) { ... })` commits when the body returns `Ok`,
+`pool.transaction(db, fn(tx) { ... })` commits when the body returns `Ok`,
 rolls back on `Error` or a panic, and turns nested transactions into
 savepoints. Errors are one `sql.Error` type for every driver, with
 `UniqueViolation`, `ForeignKeyViolation`, `NotNullViolation` and
@@ -215,14 +217,15 @@ savepoints. Errors are one `sql.Error` type for every driver, with
 
 ### The pool
 
-Connections open on demand, up to `pool_size`, in helper processes so a
+Connections open on demand, up to `size`, in helper processes so a
 slow connect never blocks other callers. A statement borrows a connection
 and runs on it in the caller's process, so rows never pass through the
 pool. A process that dies holding a connection has it closed rather than
-reused. Use `sql.supervised(builder)` in a supervision tree and
-`sql.db(builder)` for the handle; it works across pool restarts.
+reused. Use `pool.supervised(builder)` in a supervision tree and
+`pool.db(builder)` for the handle; it works across pool restarts.
 
 Every statement is a `tracer.Span` from source `"gloss.sql"`, and
-transactions are spans whose statements are their children.
-`sql.child_of(db, traceparent.span_context(ctx.trace))` puts a request's
-statements in the request's trace.
+transactions are spans whose statements are their children. Statements
+join the calling process's current span, so under gloss/http they are part
+of the request's trace; `pool.child_of(db, parent)` names a parent
+explicitly.

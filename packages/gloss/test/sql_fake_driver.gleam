@@ -1,15 +1,16 @@
-//// An in-memory `sql.Driver` for the core tests. Every statement, connect
+//// An in-memory `pool.Driver` for the core tests. Every statement, connect
 //// and close is reported to a subject so tests can assert on exactly what
 //// the core sent.
 
 import gleam/dynamic
 import gleam/erlang/process.{type Subject}
 import gloss/sql
+import gloss/sql/pool
 
-pub fn driver(log: Subject(String)) -> sql.Driver {
-  sql.Driver(name: "fake", placeholder: fn(_) { "?" }, connect: fn() {
+pub fn driver(log: Subject(String)) -> pool.Driver {
+  pool.Driver(name: "fake", placeholder: fn(_) { "?" }, connect: fn() {
     process.send(log, "connect")
-    Ok(sql.Connection(
+    Ok(pool.Connection(
       run: fn(text, _args, _timeout) {
         process.send(log, text)
         case text {

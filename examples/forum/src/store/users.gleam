@@ -10,11 +10,12 @@ import gleam/list
 import gleam/option.{type Option}
 import gleam/result
 import gloss/sql
+import gloss/sql/pool
 import gloss/store.{type Store}
 
 /// The store. It answers in the calling process, so the caller borrows the
 /// pool connection and results are never copied between processes.
-pub fn new(db: sql.Db) -> Store(Message) {
+pub fn new(db: pool.Db) -> Store(Message) {
   store.inline(fn(message) {
     case message {
       Insert(user:, reply:) -> insert(db, user) |> store.reply(reply)
@@ -27,7 +28,7 @@ pub fn new(db: sql.Db) -> Store(Message) {
   })
 }
 
-fn insert(db: sql.Db, new: NewUser) -> Result(Insertion, sql.Error) {
+fn insert(db: pool.Db, new: NewUser) -> Result(Insertion, sql.Error) {
   let inserted =
     sql.query("insert into users (email, display_name, password_hash, joined_at)
        values ($1, $2, $3, $4) returning " <> columns)
@@ -37,7 +38,7 @@ fn insert(db: sql.Db, new: NewUser) -> Result(Insertion, sql.Error) {
     |> sql.bind(sql.Timestamp(new.joined_at))
     |> sql.returning(user_decoder())
     |> sql.label("users.insert")
-    |> sql.one(db, _)
+    |> pool.one(db, _)
   case inserted {
     Ok(user) -> Ok(Inserted(user))
     Error(sql.UniqueViolation(constraint: "users_email_key", ..)) ->
@@ -46,28 +47,28 @@ fn insert(db: sql.Db, new: NewUser) -> Result(Insertion, sql.Error) {
   }
 }
 
-fn get(db: sql.Db, id: Int) -> Result(Option(User), sql.Error) {
+fn get(db: pool.Db, id: Int) -> Result(Option(User), sql.Error) {
   select("where id = $1")
   |> sql.bind(sql.Int(id))
   |> sql.label("users.get")
-  |> sql.optional(db, _)
+  |> pool.optional(db, _)
 }
 
-fn get_many(db: sql.Db, ids: List(Int)) -> Result(List(User), sql.Error) {
+fn get_many(db: pool.Db, ids: List(Int)) -> Result(List(User), sql.Error) {
   select("where id = any($1)")
   |> sql.bind(sql.Array(list.map(ids, sql.Int)))
   |> sql.label("users.get_many")
-  |> sql.all(db, _)
+  |> pool.all(db, _)
 }
 
-fn find_by_email(db: sql.Db, email: String) -> Result(Option(User), sql.Error) {
+fn find_by_email(db: pool.Db, email: String) -> Result(Option(User), sql.Error) {
   select("where email = $1")
   |> sql.bind(sql.Text(email))
   |> sql.label("users.find_by_email")
-  |> sql.optional(db, _)
+  |> pool.optional(db, _)
 }
 
-fn save(db: sql.Db, user: User) -> Result(Nil, sql.Error) {
+fn save(db: pool.Db, user: User) -> Result(Nil, sql.Error) {
   sql.query(
     "update users
      set email = $2, display_name = $3, bio = $4, avatar = $5,
@@ -81,7 +82,7 @@ fn save(db: sql.Db, user: User) -> Result(Nil, sql.Error) {
   |> sql.bind(sql.nullable(user.avatar, sql.Text))
   |> sql.bind(sql.Text(user.password_hash))
   |> sql.label("users.save")
-  |> sql.exec(db, _)
+  |> pool.exec(db, _)
   |> result.replace(Nil)
 }
 

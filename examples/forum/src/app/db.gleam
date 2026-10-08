@@ -3,6 +3,7 @@
 import gleam/result
 import gloss/pg
 import gloss/sql
+import gloss/sql/pool
 import gloss/tracer.{type Tracer}
 
 pub type Error {
@@ -11,21 +12,21 @@ pub type Error {
 }
 
 /// Start a pool for the database at `url` and bring its schema up to date.
-pub fn start(url: String, tracer: Tracer) -> Result(sql.Db, Error) {
+pub fn start(url: String, tracer: Tracer) -> Result(pool.Db, Error) {
   use config <- result.try(pg.from_url(url) |> result.replace_error(InvalidUrl))
   let assert Ok(db) =
-    sql.new(pg.driver(config))
-    |> sql.pool_size(10)
-    |> sql.tracer(tracer)
-    |> sql.start
+    pool.new(pg.driver(config))
+    |> pool.size(10)
+    |> pool.tracer(tracer)
+    |> pool.start
   use Nil <- result.map(migrate(db) |> result.map_error(SchemaFailed))
   db
 }
 
 /// Create the tables and indexes that don't exist yet. Every statement is
 /// safe to run again, so this runs at every start.
-pub fn migrate(db: sql.Db) -> Result(Nil, sql.Error) {
-  sql.script(db, schema)
+pub fn migrate(db: pool.Db) -> Result(Nil, sql.Error) {
+  pool.script(db, schema)
 }
 
 const schema =

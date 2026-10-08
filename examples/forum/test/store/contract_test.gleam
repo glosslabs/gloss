@@ -6,6 +6,7 @@ import domain/accounts/user_store.{Inserted, NewUser}
 import envoy
 import gleam/time/timestamp
 import gloss/sql
+import gloss/sql/pool
 import gloss/tracer
 import store/threads as postgres_threads
 import store/users as postgres_users
@@ -51,18 +52,18 @@ fn user(users, email) -> Int {
   user.id
 }
 
-fn with_database(test_: fn(sql.Db) -> Nil) -> Nil {
+fn with_database(test_: fn(pool.Db) -> Nil) -> Nil {
   case envoy.get("TEST_DATABASE_URL") {
     Error(Nil) -> Nil
     Ok(url) -> {
       let assert Ok(db) = db.start(url, tracer.new())
       let assert Ok(Nil) =
-        sql.script(
+        pool.script(
           db,
           "truncate posts, threads, users restart identity cascade",
         )
       test_(db)
-      sql.shutdown(db)
+      pool.shutdown(db)
     }
   }
 }
