@@ -49,3 +49,14 @@ Round trips to Docker on macOS cost about 100 µs, which is the floor for
 the Postgres, MySQL and Redis numbers; the drivers add little to it, and
 scale with concurrent callers (Postgres: 28.6k point reads/s through 10
 connections, Redis: 132k GETs/s).
+
+## Pipelined BEGIN
+
+A transaction's `BEGIN` now goes with its first statement, saving a round
+trip ("transaction: select and update", Docker on macOS):
+
+| | Before | After |
+|---|---|---|
+| Postgres | 525 µs | 391 µs |
+| MySQL | 904 µs | 788 µs |
+| SQLite (no round trips, so not pipelined) | 27–31 µs | unchanged |

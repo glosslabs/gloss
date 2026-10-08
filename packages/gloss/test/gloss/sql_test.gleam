@@ -87,6 +87,7 @@ pub fn borrow_lends_the_drivers_connection_test() {
   }
   assert raw(db) == Ok("fake")
   let assert Ok(Ok("fake")) = pool.transaction(db, fn(tx) { Ok(raw(tx)) })
+  // Borrowed work can't take BEGIN along, so it is sent first.
   assert fake.drain(log) == ["connect", "BEGIN", "COMMIT"]
 }
 
@@ -99,6 +100,33 @@ pub fn transaction_commits_on_ok_test() {
   let #(db, log) = start(1)
   let assert Ok(1) =
     pool.transaction(db, fn(tx) { pool.exec(tx, sql.query("insert x")) })
+  assert fake.drain(log) == ["connect", "BEGIN; insert x", "COMMIT"]
+}
+
+pub fn only_the_first_statement_carries_begin_test() {
+  let #(db, log) = start(1)
+  let assert Ok(1) =
+    pool.transaction(db, fn(tx) {
+      use _ <- result.try(pool.exec(tx, sql.query("insert x")))
+      pool.exec(tx, sql.query("insert y"))
+    })
+  assert fake.drain(log) == ["connect", "BEGIN; insert x", "insert y", "COMMIT"]
+}
+
+pub fn an_empty_transaction_sends_nothing_test() {
+  let #(db, log) = start(1)
+  assert pool.transaction(db, fn(_) { Ok(1) }) == Ok(1)
+  assert pool.transaction(db, fn(_) { Error("no") })
+    == Error(sql.RolledBack("no"))
+  let _ = pool.exec(db, sql.query("select 1"))
+  assert fake.drain(log) == ["connect", "select 1"]
+}
+
+pub fn without_pipelining_begin_is_sent_first_test() {
+  let log = process.new_subject()
+  let assert Ok(db) = pool.new(fake.unpipelined(log)) |> pool.start
+  let assert Ok(1) =
+    pool.transaction(db, fn(tx) { pool.exec(tx, sql.query("insert x")) })
   assert fake.drain(log) == ["connect", "BEGIN", "insert x", "COMMIT"]
 }
 
@@ -106,7 +134,7 @@ pub fn transaction_rolls_back_on_error_test() {
   let #(db, log) = start(1)
   let assert Error(sql.RolledBack(sql.QueryFailed(..))) =
     pool.transaction(db, fn(tx) { pool.all(tx, sql.query("select broken")) })
-  assert fake.drain(log) == ["connect", "BEGIN", "select broken", "ROLLBACK"]
+  assert fake.drain(log) == ["connect", "BEGIN; select broken", "ROLLBACK"]
 }
 
 pub fn flatten_merges_transaction_failures_test() {
@@ -123,16 +151,36 @@ pub fn flatten_merges_transaction_failures_test() {
 
 pub fn nested_transactions_are_savepoints_test() {
   let #(db, log) = start(1)
-  let assert Ok(Error(sql.RolledBack("inner"))) =
+  let assert Ok(Error(sql.RolledBack(sql.QueryFailed(..)))) =
     pool.transaction(db, fn(tx) {
-      Ok(pool.transaction(tx, fn(_) { Error("inner") }))
+      use _ <- result.try(pool.exec(tx, sql.query("insert x")))
+      Ok(
+        pool.transaction(tx, fn(tx) {
+          pool.exec(tx, sql.query("select broken"))
+        }),
+      )
     })
   assert fake.drain(log)
     == [
       "connect",
-      "BEGIN",
-      "SAVEPOINT gloss_1",
+      "BEGIN; insert x",
+      "SAVEPOINT gloss_1; select broken",
       "ROLLBACK TO SAVEPOINT gloss_1",
+      "COMMIT",
+    ]
+}
+
+pub fn a_nested_first_statement_opens_every_level_test() {
+  let #(db, log) = start(1)
+  let assert Ok(Ok(1)) =
+    pool.transaction(db, fn(tx) {
+      Ok(pool.transaction(tx, fn(tx) { pool.exec(tx, sql.query("insert x")) }))
+    })
+  assert fake.drain(log)
+    == [
+      "connect",
+      "BEGIN; SAVEPOINT gloss_1; insert x",
+      "RELEASE SAVEPOINT gloss_1",
       "COMMIT",
     ]
 }
@@ -144,8 +192,7 @@ pub fn a_panicking_transaction_rolls_back_and_frees_its_connection_test() {
   // The connection was in a transaction when the body panicked, so it is
   // closed rather than reused, and the pool opens another.
   assert pool.exec(db, sql.query("select 1")) == Ok(1)
-  assert fake.drain(log)
-    == ["connect", "BEGIN", "ROLLBACK", "close", "connect", "select 1"]
+  assert fake.drain(log) == ["connect", "close", "connect", "select 1"]
 }
 
 pub fn connections_are_reused_test() {
@@ -199,7 +246,7 @@ pub fn a_dead_borrower_loses_its_connection_test() {
   // The killed process may have been mid-statement: its connection is
   // closed and a fresh one serves the next caller.
   assert pool.exec(db, sql.query("after")) == Ok(1)
-  assert fake.drain(log) == ["connect", "BEGIN", "close", "connect", "after"]
+  assert fake.drain(log) == ["connect", "close", "connect", "after"]
 }
 
 pub fn a_stopped_pool_is_unavailable_test() {

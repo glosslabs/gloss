@@ -271,9 +271,23 @@ type Reply {
 /// bound and executed. A cached statement the server no longer accepts
 /// (dropped by `DEALLOCATE` or `DISCARD`, or whose result type changed
 /// with the schema) is parsed again, and run again when that is safe:
-/// outside a transaction, where the failed attempt changed nothing.
+/// outside a transaction, where the failed attempt changed nothing, or in
+/// one this request began.
 pub fn run(
   connection: PgConnection,
+  sql: String,
+  args: List(sql.Value),
+  timeout: Int,
+) -> Result(sql.Outcome, sql.Error) {
+  run_after(connection, [], sql, args, timeout)
+}
+
+/// `run`, after statements without arguments such as `BEGIN`, in the same
+/// round trip. They share one `Sync`, so when one fails the server skips
+/// the rest.
+pub fn run_after(
+  connection: PgConnection,
+  before: List(String),
   sql: String,
   args: List(sql.Value),
   timeout: Int,
@@ -281,37 +295,59 @@ pub fn run(
   let PgConnection(socket:, cache:) = connection
   use <- close_when_broken(socket)
   let args = list.map(args, codec.encode)
+  let prefix = unnamed(before)
+  let skip = list.length(before)
   case cache {
     None -> {
-      let request = [
-        protocol.parse("", sql),
-        protocol.bind("", args),
-        protocol.describe_portal(),
-        protocol.execute(),
-        protocol.sync(),
-      ]
-      request_reply(socket, request, [], timeout)
+      let request =
+        list.append(prefix, [
+          protocol.parse("", sql),
+          protocol.bind("", args),
+          protocol.describe_portal(),
+          protocol.execute(),
+          protocol.sync(),
+        ])
+      request_reply(socket, request, [], skip, timeout)
       |> result.try(fn(reply) { reply.result })
     }
     Some(cache) ->
       case statement_cache.lookup(cache, sql) {
-        Error(Nil) -> prepare_and_run(socket, cache, sql, args, timeout)
+        Error(Nil) -> prepare_and_run(socket, cache, before, sql, args, timeout)
         Ok(#(name, types)) -> {
           let request =
-            list.append(closes(cache), [
-              protocol.bind(name, args),
-              protocol.execute(),
-              protocol.sync(),
+            list.flatten([
+              closes(cache),
+              prefix,
+              [protocol.bind(name, args), protocol.execute(), protocol.sync()],
             ])
-          use reply <- result.try(request_reply(socket, request, types, timeout))
+          use reply <- result.try(request_reply(
+            socket,
+            request,
+            types,
+            skip,
+            timeout,
+          ))
           case reply.result {
             Error(sql.QueryFailed(code:, ..))
               if code == "0A000" || code == "26000"
             -> {
               statement_cache.delete(cache, sql)
-              case reply.status {
-                "I" -> prepare_and_run(socket, cache, sql, args, timeout)
-                _ -> reply.result
+              case reply.status, before {
+                "I", [] ->
+                  prepare_and_run(socket, cache, [], sql, args, timeout)
+                // The transaction began with this request: undo it and
+                // begin again.
+                "E", ["BEGIN", ..] -> {
+                  use _ <- result.try(request_reply(
+                    socket,
+                    [protocol.query("ROLLBACK")],
+                    [],
+                    0,
+                    timeout,
+                  ))
+                  prepare_and_run(socket, cache, before, sql, args, timeout)
+                }
+                _, _ -> reply.result
               }
             }
             result -> result
@@ -321,23 +357,42 @@ pub fn run(
   }
 }
 
+/// Messages that run each statement through the unnamed statement.
+fn unnamed(statements: List(String)) -> List(BytesTree) {
+  list.flat_map(statements, fn(statement) {
+    [protocol.parse("", statement), protocol.bind("", []), protocol.execute()]
+  })
+}
+
 fn prepare_and_run(
   socket: Socket,
   cache: Cache,
+  before: List(String),
   sql: String,
   args: List(protocol.Parameter),
   timeout: Int,
 ) -> Result(sql.Outcome, sql.Error) {
   let name = "gloss_" <> int.to_string(statement_cache.next_id(cache))
+  let prefix = unnamed(before)
   let request =
-    list.append(closes(cache), [
-      protocol.parse(name, sql),
-      protocol.describe_statement(name),
-      protocol.bind(name, args),
-      protocol.execute(),
-      protocol.sync(),
+    list.flatten([
+      closes(cache),
+      prefix,
+      [
+        protocol.parse(name, sql),
+        protocol.describe_statement(name),
+        protocol.bind(name, args),
+        protocol.execute(),
+        protocol.sync(),
+      ],
     ])
-  use reply <- result.try(request_reply(socket, request, [], timeout))
+  use reply <- result.try(request_reply(
+    socket,
+    request,
+    [],
+    list.length(before),
+    timeout,
+  ))
   case reply.parsed {
     True -> statement_cache.put(cache, sql, #(name, reply.types))
     False -> Nil
@@ -353,17 +408,20 @@ fn closes(cache: Cache) -> List(BytesTree) {
   })
 }
 
+/// Send `request` and collect the replies. The first `skip` statements
+/// parsed are ones run before the statement, whose parse doesn't count.
 fn request_reply(
   socket: Socket,
   request: List(BytesTree),
   types: List(Int),
+  skip: Int,
   timeout: Int,
 ) -> Result(Reply, sql.Error) {
   use Nil <- result.try(send(socket, bytes_tree.concat(request)))
   let reader = Reader(socket:, buffer: <<>>, deadline: now_ms() + timeout)
   collect(
     reader,
-    Collected(types:, rows: [], affected: 0, error: None, parsed: False),
+    Collected(types:, rows: [], affected: 0, error: None, parsed: False, skip:),
   )
 }
 
@@ -390,6 +448,7 @@ type Collected {
     affected: Int,
     error: Option(sql.Error),
     parsed: Bool,
+    skip: Int,
   )
 }
 
@@ -398,7 +457,11 @@ type Collected {
 fn collect(reader: Reader, acc: Collected) -> Result(Reply, sql.Error) {
   use #(message, reader) <- result.try(next(reader))
   case message {
-    protocol.ParseComplete -> collect(reader, Collected(..acc, parsed: True))
+    protocol.ParseComplete ->
+      case acc.skip {
+        0 -> collect(reader, Collected(..acc, parsed: True))
+        skip -> collect(reader, Collected(..acc, skip: skip - 1))
+      }
     protocol.RowDescription(columns) ->
       collect(
         reader,
@@ -460,6 +523,7 @@ pub fn script(
     socket,
     [protocol.query(sql)],
     [],
+    0,
     timeout,
   ))
   reply.result |> result.replace(Nil)
@@ -525,7 +589,14 @@ fn stream_copy_data(
 fn finish(reader: Reader) -> Result(Int, sql.Error) {
   use reply <- result.try(collect(
     reader,
-    Collected(types: [], rows: [], affected: 0, error: None, parsed: False),
+    Collected(
+      types: [],
+      rows: [],
+      affected: 0,
+      error: None,
+      parsed: False,
+      skip: 0,
+    ),
   ))
   reply.result |> result.map(fn(outcome) { outcome.affected })
 }

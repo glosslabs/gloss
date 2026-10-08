@@ -259,6 +259,9 @@ pub fn driver(config: Config) -> pool.Driver {
         run: fn(text, args, timeout) {
           connection.run(connection, text, args, timeout)
         },
+        run_after: Some(fn(before, text, args, timeout) {
+          connection.run_after(connection, before, text, args, timeout)
+        }),
         script: fn(text, timeout) {
           connection.script(connection, text, timeout)
         },

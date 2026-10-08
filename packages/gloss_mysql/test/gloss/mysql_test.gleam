@@ -305,6 +305,44 @@ pub fn a_slow_statement_times_out_test() {
   assert pool.exec(db, sql.query("select 1")) == Ok(1)
 }
 
+pub fn a_transaction_sends_begin_once_test() {
+  use db <- with_db(1)
+  let assert Ok(Nil) =
+    pool.script(db, "create temporary table seen (n int) engine = innodb")
+  let add = fn(db, n) {
+    sql.query("insert into seen values (?)")
+    |> sql.bind(sql.Int(n))
+    |> pool.exec(db, _)
+  }
+  // Both inserts are undone, so BEGIN went ahead of the first.
+  let assert Error(sql.RolledBack(Nil)) =
+    pool.transaction(db, fn(tx) {
+      let assert Ok(1) = add(tx, 1)
+      let assert Ok(1) = add(tx, 2)
+      Error(Nil)
+    })
+  assert count(db, "seen") == 0
+}
+
+pub fn a_rejected_first_statement_reads_the_begin_reply_test() {
+  use db <- with_db(1)
+  let select =
+    sql.query("select ?")
+    |> sql.bind(sql.Int(1))
+    |> sql.returning(decode.at([0], decode.int))
+  // Cached by running it once, then given too few arguments as the first
+  // statement of a transaction: nothing is executed, but BEGIN's reply is
+  // still read, so the next statement gets its own reply.
+  let assert Ok(1) = pool.one(db, select)
+  let result =
+    pool.transaction(db, fn(tx) {
+      let assert Error(sql.QueryFailed(..)) =
+        pool.exec(tx, sql.query("select ?"))
+      pool.one(tx, select)
+    })
+  assert result == Ok(1)
+}
+
 pub fn a_timeout_inside_a_transaction_breaks_the_connection_test() {
   use db <- with_db(1)
   let select_42 =

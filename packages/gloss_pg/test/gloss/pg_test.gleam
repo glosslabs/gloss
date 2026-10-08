@@ -195,6 +195,29 @@ pub fn transactions_commit_and_roll_back_test() {
   assert count(db, "items") == 1
 }
 
+pub fn begin_rides_with_the_first_statement_test() {
+  use db <- with_db(1)
+  let xid =
+    sql.query("select txid_current()::text")
+    |> sql.returning(decode.at([0], decode.string))
+  // Both statements see the same transaction id only if BEGIN went first.
+  let assert Ok(#(first, second)) =
+    pool.transaction(db, fn(tx) {
+      let assert Ok(first) = pool.one(tx, xid)
+      let assert Ok(second) = pool.one(tx, xid)
+      Ok(#(first, second))
+    })
+  assert first == second
+}
+
+pub fn a_failing_first_statement_rolls_back_test() {
+  use db <- with_db(1)
+  let assert Error(sql.RolledBack(sql.QueryFailed(..))) =
+    pool.transaction(db, fn(tx) { pool.exec(tx, sql.query("select 1 / 0")) })
+  // The connection is out of the failed transaction.
+  assert pool.exec(db, sql.query("select 1")) == Ok(1)
+}
+
 pub fn a_slow_statement_times_out_test() {
   use db <- with_db(1)
   assert pool.exec(db, sql.query("select pg_sleep(2)"))

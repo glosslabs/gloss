@@ -26,6 +26,10 @@
 //// for the whole body. A process that dies while holding a connection has
 //// it closed, never reused.
 ////
+//// A transaction's `BEGIN` is sent with its first statement, in the same
+//// round trip when the driver supports it, and a transaction that runs no
+//// statements sends nothing. Savepoints of nested transactions work alike.
+////
 //// ## Tracing
 ////
 //// Every statement is reported as a `tracer.Span` with source
@@ -81,6 +85,18 @@ pub type Connection {
   Connection(
     /// Run one statement with arguments, within `timeout` milliseconds.
     run: fn(String, List(Value), Int) -> Result(Outcome, Error),
+    /// Run statements without arguments, such as `BEGIN`, and then one
+    /// statement as `run` does, in a single round trip. The pool uses it to
+    /// send a transaction's `BEGIN` with its first statement. A driver that
+    /// can't pipeline them gives `None`, and the pool runs the statements
+    /// first with `script`.
+    ///
+    /// When a statement before fails, the result is its error. If the last
+    /// statement may have run anyway, as MySQL's protocol allows, the driver
+    /// closes the connection so the pool doesn't reuse it.
+    run_after: Option(
+      fn(List(String), String, List(Value), Int) -> Result(Outcome, Error),
+    ),
     /// Run SQL text that may hold several statements and no arguments.
     script: fn(String, Int) -> Result(Nil, Error),
     /// Whether an idle connection still looks usable, without a round trip.
@@ -122,9 +138,16 @@ pub opaque type Db {
     query_timeout: Int,
     tracer: Tracer,
     parent: Option(SpanContext),
-    /// Inside a transaction: its connection and how many transactions deep.
-    pinned: Option(#(Lease(Connection), Int)),
+    /// Inside a transaction: its connection and how deep it is.
+    pinned: Option(Pinned),
   )
+}
+
+/// The connection of a transaction `depth` transactions deep. Levels are
+/// begun lazily: `begun` counts how many are open on the server, and the
+/// next statement first opens the rest.
+type Pinned {
+  Pinned(lease: Lease(Connection), depth: Int, begun: Counter)
 }
 
 pub type StartError {
@@ -262,7 +285,7 @@ pub fn exec(db: Db, statement: Statement(row)) -> Result(Int, Error) {
 /// no arguments.
 pub fn script(db: Db, sql: String) -> Result(Nil, Error) {
   use <- traced(db, "script", fn() { describe_script(db, sql) }, fn(_) { 0 })
-  use connection <- with_connection(db)
+  use connection <- with_begun(db)
   connection.script(sql, db.query_timeout)
 }
 
@@ -282,7 +305,7 @@ pub fn borrow(
 ) -> Result(a, Error) {
   let meta = fn() { [#("driver", meta.String(db.driver))] }
   use <- traced(db, name, meta, fn(_) { 0 })
-  use connection <- with_connection(db)
+  use connection <- with_begun(db)
   work(connection, db.query_timeout)
 }
 
@@ -308,8 +331,15 @@ fn run(db: Db, statement: Statement(row)) -> Result(Outcome, Error) {
     ]
   }
   use <- traced(db, name, meta, fn(outcome: Outcome) { outcome.affected })
-  use connection <- with_connection(db)
-  connection.run(text, args, db.query_timeout)
+  use connection, owed <- with_connection(db)
+  case owed, connection.run_after {
+    [], _ -> connection.run(text, args, db.query_timeout)
+    _, Some(run_after) -> run_after(owed, text, args, db.query_timeout)
+    _, None -> {
+      use Nil <- result.try(script_each(connection, owed, db.query_timeout))
+      connection.run(text, args, db.query_timeout)
+    }
+  }
 }
 
 // --- Transactions ------------------------------------------------------------
@@ -334,8 +364,8 @@ pub fn transaction(
   let meta = fn() { [#("driver", meta.String(db.driver))] }
   use db <- traced_transaction(db, meta)
   case db.pinned {
-    Some(#(lease, depth)) -> {
-      let #(result, _) = transact(db, lease, depth, body)
+    Some(Pinned(lease:, depth:, begun:)) -> {
+      let #(result, _) = transact(db, lease, depth, begun, body)
       result
     }
     None ->
@@ -349,7 +379,7 @@ pub fn transaction(
       {
         Error(error) -> Error(sql.TransactionFailed(error))
         Ok(lease) ->
-          case rescue(fn() { transact(db, lease, 0, body) }) {
+          case rescue(fn() { transact(db, lease, 0, new_counter(), body) }) {
             Ok(#(result, reuse)) -> {
               sql_pool.checkin(db.pool, lease, reuse)
               result
@@ -365,51 +395,84 @@ pub fn transaction(
 
 /// Run `body` between BEGIN and COMMIT, or a savepoint when `depth > 0`.
 /// Also says whether the connection is fit to reuse.
+///
+/// BEGIN is left to the body's first statement (see `with_connection`), so
+/// a body that runs none sends nothing at all.
 fn transact(
   db: Db,
   lease: Lease(Connection),
   depth: Int,
+  begun: Counter,
   body: fn(Db) -> Result(a, e),
 ) -> #(Result(a, TransactionError(e)), Bool) {
   let connection = lease.connection
   let timeout = db.query_timeout
-  let #(begin, commit, rollback) = case depth {
-    0 -> #("BEGIN", "COMMIT", "ROLLBACK")
+  let #(commit, rollback) = case depth {
+    0 -> #("COMMIT", "ROLLBACK")
     _ -> {
-      let savepoint = "gloss_" <> int.to_string(depth)
+      let savepoint = savepoint(depth)
       #(
-        "SAVEPOINT " <> savepoint,
         "RELEASE SAVEPOINT " <> savepoint,
         "ROLLBACK TO SAVEPOINT " <> savepoint,
       )
     }
   }
-  let roll_back = fn() { connection.script(rollback, timeout) |> result.is_ok }
-
-  case connection.script(begin, timeout) {
-    Error(error) -> #(Error(sql.TransactionFailed(error)), reusable(error))
-    Ok(Nil) -> {
-      let inner = Db(..db, pinned: Some(#(lease, depth + 1)))
-      case rescue(fn() { body(inner) }) {
-        Ok(Ok(value)) ->
-          case connection.script(commit, timeout) {
-            Ok(Nil) -> #(Ok(value), True)
-            Error(error) -> {
-              let rolled_back = roll_back()
-              #(
-                Error(sql.TransactionFailed(error)),
-                rolled_back && reusable(error),
-              )
-            }
-          }
-        Ok(Error(error)) -> #(Error(sql.RolledBack(error)), roll_back())
-        Error(crash) -> {
-          let _ = roll_back()
-          reraise(crash)
-        }
+  // End this level, if a statement began it.
+  let end = fn(statement) {
+    case get(begun) > depth {
+      False -> Ok(Nil)
+      True -> {
+        put(begun, depth)
+        connection.script(statement, timeout)
       }
     }
   }
+  let roll_back = fn() { end(rollback) |> result.is_ok }
+
+  let inner = Db(..db, pinned: Some(Pinned(lease:, depth: depth + 1, begun:)))
+  case rescue(fn() { body(inner) }) {
+    Ok(Ok(value)) ->
+      case end(commit) {
+        Ok(Nil) -> #(Ok(value), True)
+        Error(error) -> {
+          let rolled_back = connection.script(rollback, timeout) |> result.is_ok
+          #(Error(sql.TransactionFailed(error)), rolled_back && reusable(error))
+        }
+      }
+    Ok(Error(error)) -> #(Error(sql.RolledBack(error)), roll_back())
+    Error(crash) -> {
+      let _ = roll_back()
+      reraise(crash)
+    }
+  }
+}
+
+fn savepoint(depth: Int) -> String {
+  "gloss_" <> int.to_string(depth)
+}
+
+/// The statements that open transaction levels `from` up to `to`.
+fn opening(from: Int, to: Int) -> List(String) {
+  case from >= to {
+    True -> []
+    False -> {
+      let statement = case from {
+        0 -> "BEGIN"
+        _ -> "SAVEPOINT " <> savepoint(from)
+      }
+      [statement, ..opening(from + 1, to)]
+    }
+  }
+}
+
+fn script_each(
+  connection: Connection,
+  statements: List(String),
+  timeout: Int,
+) -> Result(Nil, Error) {
+  list.try_each(statements, fn(statement) {
+    connection.script(statement, timeout)
+  })
 }
 
 fn traced_transaction(
@@ -444,13 +507,20 @@ fn traced_transaction(
 // --- Connections and spans ---------------------------------------------------
 
 /// Run `work` on the transaction's connection, or on one borrowed from the
-/// pool for its duration.
+/// pool for its duration. `work` also gets the statements that open the
+/// transaction levels not begun yet, to send before its own. They count as
+/// begun from here on, so ending the transaction ends them even when they
+/// failed.
 fn with_connection(
   db: Db,
-  work: fn(Connection) -> Result(a, Error),
+  work: fn(Connection, List(String)) -> Result(a, Error),
 ) -> Result(a, Error) {
   case db.pinned {
-    Some(#(lease, _)) -> work(lease.connection)
+    Some(Pinned(lease:, depth:, begun:)) -> {
+      let owed = opening(get(begun), depth)
+      put(begun, int.max(get(begun), depth))
+      work(lease.connection, owed)
+    }
     None -> {
       use lease <- result.try(sql_pool.checkout(
         db.pool,
@@ -458,7 +528,7 @@ fn with_connection(
         unavailable: sql.Unavailable,
         timed_out: sql.PoolTimeout,
       ))
-      case rescue(fn() { work(lease.connection) }) {
+      case rescue(fn() { work(lease.connection, []) }) {
         Ok(result) -> {
           let reuse = case result {
             Ok(_) -> True
@@ -474,6 +544,17 @@ fn with_connection(
       }
     }
   }
+}
+
+/// `with_connection` for work that can't take the opening statements along:
+/// they are run first.
+fn with_begun(
+  db: Db,
+  work: fn(Connection) -> Result(a, Error),
+) -> Result(a, Error) {
+  use connection, owed <- with_connection(db)
+  use Nil <- result.try(script_each(connection, owed, db.query_timeout))
+  work(connection)
 }
 
 /// Whether a connection that produced `error` can serve another statement.
@@ -526,3 +607,15 @@ fn rescue(work: fn() -> a) -> Result(a, Crash)
 
 @external(erlang, "gloss@sql_ffi", "reraise")
 fn reraise(crash: Crash) -> a
+
+/// A mutable integer, shared by every handle on one transaction.
+type Counter
+
+@external(erlang, "gloss@sql_ffi", "new_counter")
+fn new_counter() -> Counter
+
+@external(erlang, "gloss@sql_ffi", "get")
+fn get(counter: Counter) -> Int
+
+@external(erlang, "gloss@sql_ffi", "put")
+fn put(counter: Counter, value: Int) -> Nil

@@ -37,6 +37,7 @@ import gleam/dynamic
 import gleam/erlang/process
 import gleam/int
 import gleam/list
+import gleam/option
 import gleam/result
 import gloss/sql.{type Value}
 import gloss/sql/internal/sqlite.{type Cell}
@@ -92,6 +93,8 @@ fn connect(config: Config) -> Result(pool.Connection, sql.Error) {
   )
   Ok(pool.Connection(
     run: fn(text, args, timeout) { run(handle, text, args, timeout) },
+    // BEGIN is a call into SQLite, not a round trip: nothing to save.
+    run_after: option.None,
     script: fn(text, timeout) {
       ffi_script(handle, text, timeout) |> result.map_error(failure)
     },

@@ -97,6 +97,17 @@ pub fn deallocated_statements_are_prepared_again_test() {
   assert int(db, "select 7") == 7
 }
 
+pub fn a_stale_first_statement_in_a_transaction_is_prepared_again_test() {
+  use db <- with_db(100)
+  assert int(db, "select 7") == 7
+  let assert Ok(Nil) = pool.script(db, "deallocate all")
+  // BEGIN and the stale statement went in one request: the driver rolls
+  // back and begins again with the statement prepared afresh.
+  let select_7 =
+    sql.query("select 7") |> sql.returning(decode.at([0], decode.int))
+  assert pool.transaction(db, fn(tx) { pool.one(tx, select_7) }) == Ok(7)
+}
+
 // --- COPY --------------------------------------------------------------------
 
 pub fn copies_rows_in_and_out_test() {

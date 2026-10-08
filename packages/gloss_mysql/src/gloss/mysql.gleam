@@ -256,6 +256,10 @@ pub fn driver(config: Config) -> pool.Driver {
         connection.run(connection, text, args, timeout)
         |> result.map(fn(executed) { executed.outcome })
       },
+      run_after: Some(fn(before, text, args, timeout) {
+        connection.run_after(connection, before, text, args, timeout)
+        |> result.map(fn(executed) { executed.outcome })
+      }),
       script: fn(text, timeout) { connection.script(connection, text, timeout) },
       alive: fn() { connection.alive(connection) },
       transfer: fn(pid) { connection.transfer(connection, pid) },

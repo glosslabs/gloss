@@ -41,9 +41,14 @@ pub type Settings {
 }
 
 /// Read state while talking to the server: bytes received but not yet
-/// decoded, and when to give up.
+/// decoded, when to give up, and how many replies to statements sent ahead
+/// (see `run_after`) come before the next one.
 type Reader {
-  Reader(socket: Socket, buffer: BitArray, deadline: Int)
+  Reader(socket: Socket, buffer: BitArray, deadline: Int, pending: Int)
+}
+
+fn new_reader(socket: Socket, deadline: Int) -> Reader {
+  Reader(socket:, buffer: <<>>, deadline:, pending: 0)
 }
 
 /// An open connection and its prepared statement cache, if it has one.
@@ -111,7 +116,7 @@ fn handshake(
   settings: Settings,
   deadline: Int,
 ) -> Result(#(Socket, Bool), sql.Error) {
-  let reader = Reader(socket:, buffer: <<>>, deadline:)
+  let reader = new_reader(socket, deadline)
   use #(sequence, payload, reader) <- result.try(read(reader))
   use greeting <- result.try(case payload {
     <<0xFF, _:bits>> ->
@@ -347,16 +352,46 @@ pub fn run(
   args: List(sql.Value),
   timeout: Int,
 ) -> Result(Executed, sql.Error) {
+  run_after(connection, [], sql, args, timeout)
+}
+
+/// `run`, after statements without arguments such as `BEGIN`, sent ahead
+/// in the same write. The server still runs the statement when one before
+/// it fails, so the connection is then closed rather than trusted.
+pub fn run_after(
+  connection: MyConnection,
+  before: List(String),
+  sql: String,
+  args: List(sql.Value),
+  timeout: Int,
+) -> Result(Executed, sql.Error) {
   use <- close_when_broken(connection.socket)
   use params <- result.try(
     list.try_map(args, codec.encode)
     |> result.map_error(fn(message) { sql.QueryFailed(code: "", message:) }),
   )
   let deadline = now_ms() + timeout
+  use Nil <- result.try(
+    list.try_each(before, fn(statement) {
+      send(connection.socket, protocol.query(statement), 0)
+    }),
+  )
+  // The first command's reader reads the replies to `before` first.
+  let first =
+    Reader(
+      ..new_reader(connection.socket, deadline),
+      pending: list.length(before),
+    )
   case connection.cache {
     None -> {
-      use statement <- result.try(prepare(connection, sql, deadline))
-      let result = execute(connection, statement, params, deadline)
+      use statement <- result.try(prepare(connection, sql, first))
+      let result =
+        execute(
+          connection,
+          statement,
+          params,
+          new_reader(connection.socket, deadline),
+        )
       // A statement that was never cached is closed at once.
       let _ = send(connection.socket, protocol.close_statement(statement.id), 0)
       result
@@ -365,20 +400,25 @@ pub fn run(
       use Nil <- result.try(close_evicted(connection, cache))
       case statement_cache.lookup(cache, sql) {
         Ok(statement) -> {
-          let result = execute(connection, statement, params, deadline)
+          let result = execute(connection, statement, params, first)
           case result {
             // The server forgot the statement or wants it prepared again.
             Error(sql.QueryFailed(code: "1243", ..))
             | Error(sql.QueryFailed(code: "1615", ..)) -> {
               statement_cache.delete(cache, sql)
               use Nil <- result.try(close_evicted(connection, cache))
-              prepare_and_execute(connection, cache, sql, params, deadline)
+              prepare_and_execute(
+                connection,
+                cache,
+                sql,
+                params,
+                new_reader(connection.socket, deadline),
+              )
             }
             _ -> result
           }
         }
-        Error(Nil) ->
-          prepare_and_execute(connection, cache, sql, params, deadline)
+        Error(Nil) -> prepare_and_execute(connection, cache, sql, params, first)
       }
     }
   }
@@ -389,11 +429,16 @@ fn prepare_and_execute(
   cache: Cache,
   sql: String,
   params: List(protocol.Param),
-  deadline: Int,
+  reader: Reader,
 ) -> Result(Executed, sql.Error) {
-  use statement <- result.try(prepare(connection, sql, deadline))
+  use statement <- result.try(prepare(connection, sql, reader))
   statement_cache.put(cache, sql, statement)
-  execute(connection, statement, params, deadline)
+  execute(
+    connection,
+    statement,
+    params,
+    new_reader(connection.socket, reader.deadline),
+  )
 }
 
 /// Close statements evicted from the cache. `COM_STMT_CLOSE` has no reply.
@@ -410,10 +455,9 @@ fn close_evicted(
 fn prepare(
   connection: MyConnection,
   sql: String,
-  deadline: Int,
+  reader: Reader,
 ) -> Result(Statement, sql.Error) {
   use Nil <- result.try(send(connection.socket, protocol.prepare(sql), 0))
-  let reader = Reader(socket: connection.socket, buffer: <<>>, deadline:)
   use #(_, payload, reader) <- result.try(read(reader))
   case payload {
     <<0xFF, _:bits>> -> Error(error_packet(payload))
@@ -454,10 +498,12 @@ fn execute(
   connection: MyConnection,
   statement: Statement,
   params: List(protocol.Param),
-  deadline: Int,
+  reader: Reader,
 ) -> Result(Executed, sql.Error) {
   case list.length(params) == statement.params {
-    False ->
+    False -> {
+      // Nothing is sent, but replies to statements sent ahead are due.
+      use _ <- result.try(settle(reader))
       Error(sql.QueryFailed(
         code: "",
         message: "the statement has "
@@ -466,13 +512,13 @@ fn execute(
           <> int.to_string(list.length(params))
           <> " arguments",
       ))
+    }
     True -> {
       use Nil <- result.try(send(
         connection.socket,
         protocol.execute(statement.id, params),
         0,
       ))
-      let reader = Reader(socket: connection.socket, buffer: <<>>, deadline:)
       read_results(reader, connection.deprecate_eof, Binary, empty())
     }
   }
@@ -487,12 +533,7 @@ pub fn script(
 ) -> Result(Nil, sql.Error) {
   use <- close_when_broken(connection.socket)
   use Nil <- result.try(send(connection.socket, protocol.query(sql), 0))
-  let reader =
-    Reader(
-      socket: connection.socket,
-      buffer: <<>>,
-      deadline: now_ms() + timeout,
-    )
+  let reader = new_reader(connection.socket, now_ms() + timeout)
   read_results(reader, connection.deprecate_eof, Text, empty())
   |> result.replace(Nil)
 }
@@ -680,7 +721,27 @@ fn send(
 /// The next logical packet: its last sequence id and its payload, joined
 /// up when it spanned several physical packets.
 fn read(reader: Reader) -> Result(#(Int, BitArray, Reader), sql.Error) {
+  use reader <- result.try(settle(reader))
   read_loop(reader, <<>>)
+}
+
+/// Read the replies to statements sent ahead, each an OK packet. When one
+/// failed, the connection is closed: the replies after it can't be matched
+/// to what the caller expects.
+fn settle(reader: Reader) -> Result(Reader, sql.Error) {
+  case reader.pending {
+    0 -> Ok(reader)
+    pending -> {
+      use #(_, payload, reader) <- result.try(read_loop(reader, <<>>))
+      case payload {
+        <<0xFF, _:bits>> -> {
+          tcp.close(reader.socket)
+          Error(error_packet(payload))
+        }
+        _ -> settle(Reader(..reader, pending: pending - 1))
+      }
+    }
+  }
 }
 
 fn read_loop(
