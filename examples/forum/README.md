@@ -53,6 +53,7 @@ outside services (logging, Sentry, the database) and composes everything.
 | `server/middleware/current_user` | The signed-in user from the session |
 | `server/views/*` | Lustre views rendered to HTML |
 | `store/users`, `store/threads` | The stores, answered from Postgres |
+| `store/schema/*` | Each table's columns, for `gloss/sql/query` |
 
 ### Domains and stores
 
@@ -64,7 +65,7 @@ Each aggregate has a store port in its domain: a message type, such as
 store process answers, built on `gloss/store`. The domain services keep the
 rules (validating input, hashing passwords, deciding timestamps) and send
 messages for storage. `store/users` and `store/threads` answer them
-with SQL from a `store.inline` store, which runs in the calling process:
+with queries built by `gloss/sql/query` from a `store.inline` store, which runs in the calling process:
 the pool already runs statements in parallel, and nothing is copied
 between processes. The tests answer the same
 messages from memory with `store.serial` (`test/support/memory_*`), and
@@ -87,9 +88,9 @@ each message's answer.
   (`gloss/http/compress`).
 - Query parameters for paging (`gloss/http/query`).
 - HTML error pages (`server.error_page`).
-- Postgres through `gloss/sql` and `gloss/pg`: statements with typed
-  decoders, transactions, `= any($1)` with arrays, unique-violation
-  mapping, and a span per statement in the log.
+- Postgres through `gloss/sql` and `gloss/pg`: queries built with
+  `gloss/sql/query` from typed table modules, `RETURNING`, transactions,
+  unique-violation mapping, and a span per statement in the log.
 
 `mise run test` runs the domain tests and the server tests, which drive the
 whole app through `server.handle` like a browser keeping its session cookie,

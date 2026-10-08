@@ -11,6 +11,7 @@ import gloss/http/reply.{type Request}
 import gloss/http/router
 import gloss/http/server
 import gloss/logger
+import gloss/sqlite
 import gloss/testing/request
 import gloss/testing/response
 import gloss/tracer
@@ -32,8 +33,9 @@ fn session() -> fn(Request) -> response.Response {
       sentry_dsn: None,
       api_token: "t",
       log_dir: "build/test-log",
+      database_path: "",
     )
-  let assert Ok(notes) = notes.start()
+  let assert Ok(notes) = notes.start(sqlite.memory())
   let state = state.new(config, notes:)
   let builder =
     app_server.builder(

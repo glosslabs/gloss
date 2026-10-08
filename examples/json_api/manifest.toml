@@ -8,6 +8,7 @@
 
 packages = [
   { name = "envoy", version = "1.2.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "envoy", source = "hex", outer_checksum = "9C6FBB6BFA02A52798BEEC5977A738CAD6E4A057F4B67FD0C8061AD2502C191A" },
+  { name = "esqlite", version = "0.9.0", build_tools = ["rebar3"], requirements = [], otp_app = "esqlite", source = "hex", outer_checksum = "CCF72258A4EE152EC7AD92AA9A03552EB6CA1B06B65C93AD5B6E55C302E05855" },
   { name = "gleam_crypto", version = "1.6.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleam_crypto", source = "hex", outer_checksum = "2DE9E4EF53CF6FEE049D4F765731F7178F7A11AEFAE00EEE63BF7536B354AD3F" },
   { name = "gleam_erlang", version = "1.3.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleam_erlang", source = "hex", outer_checksum = "1124AD3AA21143E5AF0FC5CF3D9529F6DB8CA03E43A55711B60B6B7B3874375C" },
   { name = "gleam_http", version = "4.4.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleam_http", source = "hex", outer_checksum = "F065CE9941A7756ABBAEAE7F9F32A96CAD29DA3311A381DB2D926EA8E8C156DC" },
@@ -19,6 +20,9 @@ packages = [
   { name = "gleeunit", version = "1.11.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleeunit", source = "hex", outer_checksum = "EC31ABA74256AEA531EDF8169931D775BBB384FED0A8A1BDC4DD9354E3E21826" },
   { name = "gloss", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_erlang", "gleam_http", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time"], source = "local", path = "../../packages/gloss" },
   { name = "gloss_sentry", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_erlang", "gleam_http", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss"], source = "local", path = "../../packages/observability/gloss_sentry" },
+  { name = "gloss_sql", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib", "gleam_time"], source = "local", path = "../../packages/sql/gloss_sql" },
+  { name = "gloss_sql_pool", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss", "gloss_sql"], source = "local", path = "../../packages/sql/gloss_sql_pool" },
+  { name = "gloss_sqlite", version = "0.1.0", build_tools = ["gleam"], requirements = ["esqlite", "gleam_erlang", "gleam_stdlib", "gloss", "gloss_sql", "gloss_sql_pool"], source = "local", path = "../../packages/sql/gloss_sqlite" },
   { name = "gloss_testing", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_http", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss"], source = "local", path = "../../packages/gloss_testing" },
 ]
 
@@ -33,4 +37,7 @@ gleam_stdlib = { version = ">= 1.0.5 and < 2.0.0" }
 gleeunit = { version = ">= 1.11.0 and < 2.0.0" }
 gloss = { path = "../../packages/gloss" }
 gloss_sentry = { path = "../../packages/observability/gloss_sentry" }
+gloss_sql = { path = "../../packages/sql/gloss_sql" }
+gloss_sql_pool = { path = "../../packages/sql/gloss_sql_pool" }
+gloss_sqlite = { path = "../../packages/sql/gloss_sqlite" }
 gloss_testing = { path = "../../packages/gloss_testing" }

@@ -12,6 +12,8 @@ pub type Config {
     api_token: String,
     /// Where `app.log` and `error.log` are written.
     log_dir: String,
+    /// The SQLite file the notes are kept in.
+    database_path: String,
   )
 }
 
@@ -23,11 +25,12 @@ pub fn defaults() -> Config {
     sentry_dsn: None,
     api_token: "dev",
     log_dir: "log",
+    database_path: "notes.db",
   )
 }
 
-/// The defaults, with `PORT`, `APP_ENV`, `SENTRY_DSN`, `API_TOKEN` and
-/// `LOG_DIR` applied over them where they are set.
+/// The defaults, with `PORT`, `APP_ENV`, `SENTRY_DSN`, `API_TOKEN`,
+/// `LOG_DIR` and `DATABASE_PATH` applied over them where they are set.
 pub fn from_env() -> Config {
   let defaults = defaults()
   Config(
@@ -40,5 +43,7 @@ pub fn from_env() -> Config {
       |> option.or(defaults.sentry_dsn),
     api_token: envoy.get("API_TOKEN") |> result.unwrap(defaults.api_token),
     log_dir: envoy.get("LOG_DIR") |> result.unwrap(defaults.log_dir),
+    database_path: envoy.get("DATABASE_PATH")
+      |> result.unwrap(defaults.database_path),
   )
 }

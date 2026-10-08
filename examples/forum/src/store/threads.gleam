@@ -5,14 +5,16 @@ import domain/forum/thread_store.{
   type Message, type NewPost, type NewThread, AddPost, Get, Open, Recent,
 }
 import gleam/dict
-import gleam/dynamic/decode
 import gleam/list
 import gleam/option.{type Option, None}
 import gleam/result
 import gleam/time/timestamp.{type Timestamp}
 import gloss/sql
 import gloss/sql/pool
+import gloss/sql/query
 import gloss/store.{type Store}
+import store/schema/posts
+import store/schema/threads
 
 /// The store. It answers in the calling process, so the caller borrows the
 /// pool connection and results are never copied between processes.
@@ -32,13 +34,12 @@ fn open(db: pool.Db, new: NewThread) -> Result(Thread, sql.Error) {
   use id <- result.try(
     pool.transaction(db, fn(tx) {
       use id <- result.try(
-        sql.query(
-          "insert into threads (title, last_activity) values ($1, $2)
-           returning id",
-        )
-        |> sql.bind(sql.Text(new.title))
-        |> sql.bind(sql.Timestamp(new.at))
-        |> sql.returning(decode.at([0], decode.int))
+        query.insert(threads.table(), [
+          query.set(threads.title(), new.title),
+          query.set(threads.last_activity(), new.at),
+        ])
+        |> query.select(query.only(threads.id()))
+        |> query.to_statement
         |> sql.label("threads.open")
         |> pool.one(tx, _),
       )
@@ -54,9 +55,11 @@ fn add_post(db: pool.Db, new: NewPost) -> Result(Option(Thread), sql.Error) {
   let added =
     pool.transaction(db, fn(tx) {
       use touched <- result.try(
-        sql.query("update threads set last_activity = $2 where id = $1")
-        |> sql.bind(sql.Int(new.thread_id))
-        |> sql.bind(sql.Timestamp(new.at))
+        query.update(threads.table(), [
+          query.set(threads.last_activity(), new.at),
+        ])
+        |> query.where(query.eq(threads.id(), new.thread_id))
+        |> query.to_statement
         |> sql.label("threads.touch")
         |> pool.exec(tx, _),
       )
@@ -81,20 +84,21 @@ fn insert_post(
   body: String,
   at: Timestamp,
 ) -> Result(Int, sql.Error) {
-  sql.query(
-    "insert into posts (thread_id, author_id, body, at) values ($1, $2, $3, $4)",
-  )
-  |> sql.bind(sql.Int(thread_id))
-  |> sql.bind(sql.Int(author_id))
-  |> sql.bind(sql.Text(body))
-  |> sql.bind(sql.Timestamp(at))
+  query.insert(posts.table(), [
+    query.set(posts.thread_id(), thread_id),
+    query.set(posts.author_id(), author_id),
+    query.set(posts.body(), body),
+    query.set(posts.at(), at),
+  ])
+  |> query.to_statement
   |> sql.label("posts.insert")
   |> pool.exec(tx, _)
 }
 
 fn get(db: pool.Db, id: Int) -> Result(Option(Thread), sql.Error) {
-  select_threads("where id = $1")
-  |> sql.bind(sql.Int(id))
+  select_threads()
+  |> query.where(query.eq(threads.id(), id))
+  |> query.to_statement
   |> sql.label("threads.get")
   |> with_posts(db, _)
   |> result.map(fn(threads) { list.first(threads) |> option.from_result })
@@ -105,9 +109,12 @@ fn recent(
   offset: Int,
   limit: Int,
 ) -> Result(List(Thread), sql.Error) {
-  select_threads("order by last_activity desc, id desc limit $1 offset $2")
-  |> sql.bind(sql.Int(limit))
-  |> sql.bind(sql.Int(offset))
+  select_threads()
+  |> query.order_by(threads.last_activity(), query.Desc)
+  |> query.order_by(threads.id(), query.Desc)
+  |> query.limit(limit)
+  |> query.offset(offset)
+  |> query.to_statement
   |> sql.label("threads.recent")
   |> with_posts(db, _)
 }
@@ -117,13 +124,17 @@ type Row {
   Row(id: Int, title: String, last_activity: Timestamp)
 }
 
-fn select_threads(rest: String) -> sql.Statement(Row) {
-  sql.query("select id, title, last_activity from threads " <> rest)
-  |> sql.returning({
-    use id <- decode.field(0, decode.int)
-    use title <- decode.field(1, decode.string)
-    use last_activity <- decode.field(2, sql.timestamp_decoder())
-    decode.success(Row(id:, title:, last_activity:))
+fn select_threads() -> query.Query(
+  query.Filtered(query.Select),
+  threads.Threads,
+  Row,
+) {
+  query.from(threads.table())
+  |> query.select({
+    use id <- query.field(threads.id())
+    use title <- query.field(threads.title())
+    use last_activity <- query.field(threads.last_activity())
+    query.done(Row(id:, title:, last_activity:))
   })
 }
 
@@ -133,30 +144,30 @@ fn with_posts(
   threads: sql.Statement(Row),
 ) -> Result(List(Thread), sql.Error) {
   use rows <- result.try(pool.all(db, threads))
-  use posts <- result.map(case rows {
+  use found <- result.map(case rows {
     [] -> Ok([])
     _ ->
-      sql.query(
-        "select thread_id, id, author_id, body, at
-         from posts
-         where thread_id = any($1)
-         order by id",
-      )
-      |> sql.bind(sql.Array(list.map(rows, fn(row) { sql.Int(row.id) })))
-      |> sql.returning({
-        use thread_id <- decode.field(0, decode.int)
-        use id <- decode.field(1, decode.int)
-        use author_id <- decode.field(2, decode.int)
-        use body <- decode.field(3, decode.string)
-        use at <- decode.field(4, sql.timestamp_decoder())
-        decode.success(#(thread_id, Post(id:, author_id:, body:, at:)))
+      query.from(posts.table())
+      |> query.where(query.in(
+        posts.thread_id(),
+        list.map(rows, fn(row) { row.id }),
+      ))
+      |> query.order_by(posts.id(), query.Asc)
+      |> query.select({
+        use thread_id <- query.field(posts.thread_id())
+        use id <- query.field(posts.id())
+        use author_id <- query.field(posts.author_id())
+        use body <- query.field(posts.body())
+        use at <- query.field(posts.at())
+        query.done(#(thread_id, Post(id:, author_id:, body:, at:)))
       })
+      |> query.to_statement
       |> sql.label("posts.for_threads")
       |> pool.all(db, _)
   })
-  let by_thread = list.group(posts, fn(pair) { pair.0 })
+  let by_thread = list.group(found, fn(pair) { pair.0 })
   list.map(rows, fn(row) {
-    let posts: List(Post) =
+    let thread_posts: List(Post) =
       dict.get(by_thread, row.id)
       |> result.unwrap([])
       |> list.reverse
@@ -164,7 +175,7 @@ fn with_posts(
     Thread(
       id: row.id,
       title: row.title,
-      posts:,
+      posts: thread_posts,
       last_activity: row.last_activity,
     )
   })

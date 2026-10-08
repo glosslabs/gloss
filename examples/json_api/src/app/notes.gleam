@@ -1,85 +1,95 @@
-//// An in-memory store of notes, held by one process.
+//// The notes, kept in SQLite and queried with gloss/sql/query.
 
-import gleam/dict.{type Dict}
-import gleam/erlang/process.{type Subject}
-import gleam/int
-import gleam/list
-import gleam/otp/actor
+import app/notes/table
+import gleam/option.{type Option}
 import gleam/result
+import gloss/sql
+import gloss/sql/pool
+import gloss/sql/query
+import gloss/sqlite
 
 pub type Note {
   Note(id: Int, title: String, body: String)
 }
 
 pub opaque type Notes {
-  Notes(subject: Subject(Message))
+  Notes(db: pool.Db)
 }
 
-type State {
-  State(next_id: Int, notes: Dict(Int, Note))
+pub type StartError {
+  PoolFailed(pool.StartError)
+  SchemaFailed(sql.Error)
 }
 
-type Message {
-  All(reply: Subject(List(Note)))
-  Get(id: Int, reply: Subject(Result(Note, Nil)))
-  Create(title: String, body: String, reply: Subject(Note))
-  Delete(id: Int, reply: Subject(Result(Nil, Nil)))
+/// Open the database and create the notes table if it doesn't exist yet.
+pub fn start(database: sqlite.Config) -> Result(Notes, StartError) {
+  use db <- result.try(
+    pool.new(sqlite.driver(database))
+    |> pool.start
+    |> result.map_error(PoolFailed),
+  )
+  use Nil <- result.map(
+    pool.script(db, schema) |> result.map_error(SchemaFailed),
+  )
+  Notes(db)
 }
 
-pub fn start() -> Result(Notes, actor.StartError) {
-  actor.new(State(next_id: 1, notes: dict.new()))
-  |> actor.on_message(on_message)
-  |> actor.start
-  |> result.map(fn(started) { Notes(started.data) })
-}
+const schema =
+  "
+create table if not exists notes (
+  id    integer primary key,
+  title text not null,
+  body  text not null default ''
+);
+"
 
 /// Every note, oldest first.
-pub fn all(notes: Notes) -> List(Note) {
-  process.call(notes.subject, 1000, All)
+pub fn all(notes: Notes) -> Result(List(Note), sql.Error) {
+  query.from(table.table())
+  |> query.order_by(table.id(), query.Asc)
+  |> query.select(note())
+  |> query.to_statement
+  |> sql.label("notes.all")
+  |> pool.all(notes.db, _)
 }
 
-pub fn get(notes: Notes, id: Int) -> Result(Note, Nil) {
-  process.call(notes.subject, 1000, Get(id, _))
+pub fn get(notes: Notes, id: Int) -> Result(Option(Note), sql.Error) {
+  query.from(table.table())
+  |> query.where(query.eq(table.id(), id))
+  |> query.select(note())
+  |> query.to_statement
+  |> sql.label("notes.get")
+  |> pool.optional(notes.db, _)
 }
 
-pub fn create(notes: Notes, title: String, body: String) -> Note {
-  process.call(notes.subject, 1000, Create(title, body, _))
+pub fn create(
+  notes: Notes,
+  title: String,
+  body: String,
+) -> Result(Note, sql.Error) {
+  query.insert(table.table(), [
+    query.set(table.title(), title),
+    query.set(table.body(), body),
+  ])
+  |> query.select(note())
+  |> query.to_statement
+  |> sql.label("notes.create")
+  |> pool.one(notes.db, _)
 }
 
-pub fn delete(notes: Notes, id: Int) -> Result(Nil, Nil) {
-  process.call(notes.subject, 1000, Delete(id, _))
+/// Delete the note, saying whether there was one.
+pub fn delete(notes: Notes, id: Int) -> Result(Bool, sql.Error) {
+  query.delete(table.table())
+  |> query.where(query.eq(table.id(), id))
+  |> query.to_statement
+  |> sql.label("notes.delete")
+  |> pool.exec(notes.db, _)
+  |> result.map(fn(deleted) { deleted > 0 })
 }
 
-fn on_message(state: State, message: Message) -> actor.Next(State, Message) {
-  case message {
-    All(reply:) -> {
-      dict.values(state.notes)
-      |> list.sort(fn(a, b) { int.compare(a.id, b.id) })
-      |> process.send(reply, _)
-      actor.continue(state)
-    }
-    Get(id:, reply:) -> {
-      process.send(reply, dict.get(state.notes, id))
-      actor.continue(state)
-    }
-    Create(title:, body:, reply:) -> {
-      let note = Note(id: state.next_id, title:, body:)
-      process.send(reply, note)
-      actor.continue(State(
-        next_id: state.next_id + 1,
-        notes: dict.insert(state.notes, note.id, note),
-      ))
-    }
-    Delete(id:, reply:) ->
-      case dict.has_key(state.notes, id) {
-        True -> {
-          process.send(reply, Ok(Nil))
-          actor.continue(State(..state, notes: dict.delete(state.notes, id)))
-        }
-        False -> {
-          process.send(reply, Error(Nil))
-          actor.continue(state)
-        }
-      }
-  }
+fn note() -> query.Selection(table.Notes, Note) {
+  use id <- query.field(table.id())
+  use title <- query.field(table.title())
+  use body <- query.field(table.body())
+  query.done(Note(id:, title:, body:))
 }

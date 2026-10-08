@@ -9,6 +9,7 @@ import gloss/http/server as http_server
 import gloss/logger
 import gloss/meta
 import gloss/signal
+import gloss/sqlite
 import gloss/tracer
 
 pub fn main() -> Nil {
@@ -26,7 +27,7 @@ pub fn main() -> Nil {
     |> tracing.with_logger(log)
     |> tracing.with_sentry(sentry)
 
-  let assert Ok(notes) = notes.start()
+  let assert Ok(notes) = notes.start(sqlite.file(config.database_path))
   let state = state.new(config, notes:)
 
   let assert Ok(srv) = server.start(config, state, log:, tracer:)
