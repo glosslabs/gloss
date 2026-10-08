@@ -1,5 +1,4 @@
 import gleam/dynamic/decode
-import gleam/int
 import gleam/javascript/promise.{type Promise}
 import gleam/list
 import gleam/string
@@ -25,7 +24,7 @@ fn delay(ms: Int) -> Promise(Nil)
 fn fake(log: Log, ms: Int) -> sql_async.Database {
   sql_async.database(
     name: "fake",
-    placeholder: fn(n) { "$" <> int.to_string(n) },
+    dialect: sql.Postgres,
     run: fn(text, args) {
       push(log, "start " <> text)
       use _ <- promise.await(delay(ms))

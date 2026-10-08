@@ -66,7 +66,7 @@ pub fn memory() -> Config {
 
 /// The driver to give `pool.new`.
 pub fn driver(config: Config) -> pool.Driver {
-  pool.Driver(name: "sqlite", placeholder: sqlite.placeholder, connect: fn() {
+  pool.Driver(name: "sqlite", dialect: sql.Sqlite, connect: fn() {
     connect(config)
   })
 }

@@ -73,7 +73,7 @@ pub fn open(config: Config) -> Promise(Result(Database, sql.Error)) {
   use handle <- result.map(opened |> result.map_error(sql.ConnectionFailed))
   sql_async.database(
     name: "sqlite",
-    placeholder: sqlite.placeholder,
+    dialect: sql.Sqlite,
     run: fn(text, args) { promise.resolve(run(handle, text, args)) },
     script: fn(text) {
       promise.resolve(ffi_script(handle, text) |> result.map_error(failure))

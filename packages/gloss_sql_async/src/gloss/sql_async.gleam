@@ -30,7 +30,7 @@ type Queue
 pub opaque type Database {
   Database(
     name: String,
-    placeholder: fn(Int) -> String,
+    dialect: sql.Dialect,
     run: fn(String, List(Value)) -> Promise(Result(Outcome, Error)),
     script: fn(String) -> Promise(Result(Nil, Error)),
     close: fn() -> Promise(Nil),
@@ -46,20 +46,12 @@ pub opaque type Database {
 /// statements, and `close` closes the database.
 pub fn database(
   name name: String,
-  placeholder placeholder: fn(Int) -> String,
+  dialect dialect: sql.Dialect,
   run run: fn(String, List(Value)) -> Promise(Result(Outcome, Error)),
   script script: fn(String) -> Promise(Result(Nil, Error)),
   close close: fn() -> Promise(Nil),
 ) -> Database {
-  Database(
-    name:,
-    placeholder:,
-    run:,
-    script:,
-    close:,
-    queue: new_queue(),
-    depth: 0,
-  )
+  Database(name:, dialect:, run:, script:, close:, queue: new_queue(), depth: 0)
 }
 
 /// The driver's name, e.g. `"sqlite"`.
@@ -117,7 +109,7 @@ fn run(
   db: Database,
   statement: Statement(row),
 ) -> Promise(Result(Outcome, Error)) {
-  let #(text, args) = sql.render(statement, db.placeholder)
+  let #(text, args) = sql.render(statement, db.dialect)
   use <- exclusive(db)
   db.run(text, args)
 }

@@ -68,9 +68,8 @@ pub type Driver {
     /// Open one connection. Called in a short-lived process; the connection
     /// is then handed to the pool with `transfer`.
     connect: fn() -> Result(Connection, Error),
-    /// The placeholder for argument `n` (from 1): `$1` for Postgres, `?`
-    /// for SQLite.
-    placeholder: fn(Int) -> String,
+    /// The SQL the database speaks, for rendering statements.
+    dialect: sql.Dialect,
   )
 }
 
@@ -133,7 +132,7 @@ pub opaque type Db {
   Db(
     pool: Subject(PoolMessage),
     driver: String,
-    placeholder: fn(Int) -> String,
+    dialect: sql.Dialect,
     checkout_timeout: Int,
     query_timeout: Int,
     tracer: Tracer,
@@ -217,7 +216,7 @@ pub fn db(builder: Builder) -> Db {
   Db(
     pool: process.named_subject(builder.name),
     driver: builder.driver.name,
-    placeholder: builder.driver.placeholder,
+    dialect: builder.driver.dialect,
     checkout_timeout: duration.to_milliseconds(builder.checkout_timeout),
     query_timeout: duration.to_milliseconds(builder.query_timeout),
     tracer: builder.tracer,
@@ -314,7 +313,7 @@ fn describe_script(db: Db, sql: String) -> meta.Meta {
 }
 
 fn run(db: Db, statement: Statement(row)) -> Result(Outcome, Error) {
-  let #(text, args) = sql.render(statement, db.placeholder)
+  let #(text, args) = sql.render(statement, db.dialect)
   // Naming the statement costs string work, so only when it is traced.
   let name = case tracer.enabled(db.tracer) {
     True -> sql.name(statement, text)

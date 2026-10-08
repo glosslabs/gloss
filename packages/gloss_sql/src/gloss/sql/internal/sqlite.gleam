@@ -220,11 +220,6 @@ pub fn error(code: Int, message: String) -> sql.Error {
   }
 }
 
-/// The placeholder for argument `n`: SQLite's numbered `?N`.
-pub fn placeholder(n: Int) -> String {
-  "?" <> int.to_string(n)
-}
-
 /// `Some(declared)` unless it is empty.
 pub fn declared(text: String) -> Option(String) {
   case text {

@@ -247,31 +247,25 @@ pub fn statement_cache(config: Config, size: Int) -> Config {
 /// The driver to give to `pool.new`.
 pub fn driver(config: Config) -> pool.Driver {
   let settings = settings(config)
-  pool.Driver(
-    name: "postgres",
-    placeholder: fn(n) { "$" <> int.to_string(n) },
-    connect: fn() {
-      use connection <- result.map(connection.open(
-        settings,
-        config.statement_cache,
-      ))
-      pool.Connection(
-        run: fn(text, args, timeout) {
-          connection.run(connection, text, args, timeout)
-        },
-        run_after: Some(fn(before, text, args, timeout) {
-          connection.run_after(connection, before, text, args, timeout)
-        }),
-        script: fn(text, timeout) {
-          connection.script(connection, text, timeout)
-        },
-        alive: fn() { connection.alive(connection) },
-        transfer: fn(pid) { connection.transfer(connection, pid) },
-        close: fn() { connection.close(connection) },
-        raw: coerce(connection),
-      )
-    },
-  )
+  pool.Driver(name: "postgres", dialect: sql.Postgres, connect: fn() {
+    use connection <- result.map(connection.open(
+      settings,
+      config.statement_cache,
+    ))
+    pool.Connection(
+      run: fn(text, args, timeout) {
+        connection.run(connection, text, args, timeout)
+      },
+      run_after: Some(fn(before, text, args, timeout) {
+        connection.run_after(connection, before, text, args, timeout)
+      }),
+      script: fn(text, timeout) { connection.script(connection, text, timeout) },
+      alive: fn() { connection.alive(connection) },
+      transfer: fn(pid) { connection.transfer(connection, pid) },
+      close: fn() { connection.close(connection) },
+      raw: coerce(connection),
+    )
+  })
 }
 
 fn settings(config: Config) -> connection.Settings {

@@ -29,7 +29,6 @@
 //// until it finishes. Statements run inside the WebAssembly module, so
 //// there is no query timeout.
 
-import gleam/int
 import gleam/javascript/promise.{type Promise}
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -72,7 +71,7 @@ pub fn open(config: Config) -> Promise(Result(Database, sql.Error)) {
   use handle <- result.map(opened |> result.map_error(sql.ConnectionFailed))
   sql_async.database(
     name: "pglite",
-    placeholder: placeholder,
+    dialect: sql.Postgres,
     run: fn(text, args) { run(handle, text, args) },
     script: fn(text) {
       ffi_script(handle, text)
@@ -80,10 +79,6 @@ pub fn open(config: Config) -> Promise(Result(Database, sql.Error)) {
     },
     close: fn() { ffi_close(handle) },
   )
-}
-
-fn placeholder(n: Int) -> String {
-  "$" <> int.to_string(n)
 }
 
 fn run(

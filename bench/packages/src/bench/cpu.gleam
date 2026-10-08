@@ -194,7 +194,7 @@ fn sql_core() {
     |> list.fold(sql.query("insert into t values ("), fn(s, n) {
       s |> sql.arg(sql.Int(n)) |> sql.append(",")
     })
-    |> sql.render(fn(n) { "$" <> int.to_string(n) })
+    |> sql.render(sql.Postgres)
   })
   let row = [
     sql.Int(1),

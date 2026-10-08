@@ -1,6 +1,5 @@
 import gleam/dynamic/decode
 import gleam/erlang/process
-import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -69,7 +68,7 @@ pub fn arg_numbers_placeholders_after_bound_values_test() {
     |> sql.when(None, fn(s, q) { s |> sql.append(" and name = ") |> sql.arg(q) })
     |> sql.append(" limit ")
     |> sql.arg(sql.Int(10))
-  assert sql.render(statement, fn(n) { "$" <> int.to_string(n) })
+  assert sql.render(statement, sql.Postgres)
     == #("select * from users where org = $1 and status = $2 limit $3", [
       sql.Int(7),
       sql.Text("active"),

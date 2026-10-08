@@ -1,14 +1,9 @@
 import gleam/dynamic/decode
-import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/time/calendar
 import gleam/time/timestamp
 import gloss/sql
-
-fn dollar(n: Int) -> String {
-  "$" <> int.to_string(n)
-}
 
 pub fn render_numbers_args_after_bound_ones_test() {
   let statement =
@@ -20,7 +15,7 @@ pub fn render_numbers_args_after_bound_ones_test() {
     |> sql.when(None, fn(s, v) { s |> sql.append(" and c = ") |> sql.arg(v) })
     |> sql.append(" limit ")
     |> sql.arg(sql.Int(10))
-  assert sql.render(statement, dollar)
+  assert sql.render(statement, sql.Postgres)
     == #("select * from t where a = $1 and b = $2 limit $3", [
       sql.Int(1),
       sql.Text("x"),
@@ -32,8 +27,24 @@ pub fn render_numbers_args_after_bound_ones_test() {
     |> sql.bind(sql.Int(1))
     |> sql.append(" and b = ")
     |> sql.arg(sql.Text("x"))
-  assert sql.render(question, fn(_) { "?" }).0
+  assert sql.render(question, sql.Mysql).0
     == "select * from t where a = ? and b = ?"
+  assert sql.render(question, sql.Sqlite).0
+    == "select * from t where a = ? and b = ?2"
+}
+
+pub fn identifiers_are_quoted_for_the_dialect_test() {
+  let statement =
+    sql.query("select ")
+    |> sql.identifier("users.email")
+    |> sql.append(" from ")
+    |> sql.identifier("we\"ird")
+  assert sql.render(statement, sql.Postgres).0
+    == "select \"users\".\"email\" from \"we\"\"ird\""
+  assert sql.render(statement, sql.Sqlite).0
+    == "select \"users\".\"email\" from \"we\"\"ird\""
+  assert sql.render(statement, sql.Mysql).0
+    == "select `users`.`email` from `we\"ird`"
 }
 
 pub fn names_come_from_labels_or_the_first_keyword_test() {

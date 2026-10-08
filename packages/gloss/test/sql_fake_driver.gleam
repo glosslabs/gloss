@@ -20,7 +20,7 @@ pub fn unpipelined(log: Subject(String)) -> pool.Driver {
 }
 
 fn driver_with(log: Subject(String), pipelines pipelines: Bool) -> pool.Driver {
-  pool.Driver(name: "fake", placeholder: fn(_) { "?" }, connect: fn() {
+  pool.Driver(name: "fake", dialect: sql.Mysql, connect: fn() {
     process.send(log, "connect")
     let run_after = case pipelines {
       // Pipelined statements are logged as one entry: "BEGIN; insert x".

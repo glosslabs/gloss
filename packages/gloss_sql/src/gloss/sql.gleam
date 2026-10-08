@@ -37,6 +37,9 @@
 //// them, so `bind` and `arg` can be mixed. Only `query` and `append` text
 //// reaches the database unescaped; never build it from user input.
 ////
+//// `gloss/sql/query` builds statements from typed tables and columns
+//// instead of text.
+////
 //// ## Rows
 ////
 //// Each row is decoded with `gleam/dynamic/decode`, addressing columns by
@@ -47,7 +50,8 @@
 ////
 //// ## For drivers
 ////
-//// A driver renders a statement with `render`, runs it, and hands back an
+//// A driver renders a statement for its `Dialect` with `render`, runs it,
+//// and hands back an
 //// `Outcome`; `all`, `optional` and `one` decode it, and `name` is what to
 //// call the statement in traces.
 
@@ -171,6 +175,19 @@ pub fn flatten(result: Result(a, TransactionError(Error))) -> Result(a, Error) {
   }
 }
 
+// --- Dialects ----------------------------------------------------------------
+
+/// The SQL a database speaks, as far as rendering a statement goes: how
+/// placeholders and quoted identifiers are written.
+pub type Dialect {
+  /// `$1` placeholders, `"double quoted"` identifiers.
+  Postgres
+  /// `?` placeholders, `` `backquoted` `` identifiers.
+  Mysql
+  /// `?1` placeholders, `"double quoted"` identifiers.
+  Sqlite
+}
+
 // --- Statements --------------------------------------------------------------
 
 pub opaque type Statement(row) {
@@ -187,6 +204,7 @@ pub opaque type Statement(row) {
 type Part {
   Sql(String)
   Placeholder(Int)
+  Identifier(String)
 }
 
 /// A statement from SQL text written with the driver's placeholders. Its
@@ -214,6 +232,14 @@ pub fn arg(statement: Statement(row), value: Value) -> Statement(row) {
   ])
 }
 
+/// Add a table or column name, quoted as the database expects. A name with
+/// dots is a qualified one: `"public.users"`, `"users.email"`. Quoting
+/// makes any name safe to send, but choose names in code, not from user
+/// input.
+pub fn identifier(statement: Statement(row), name: String) -> Statement(row) {
+  Statement(..statement, parts: [Identifier(name), ..statement.parts])
+}
+
 /// Apply `add` only when `value` is `Some`.
 pub fn when(
   statement: Statement(row),
@@ -237,22 +263,44 @@ pub fn label(statement: Statement(row), label: String) -> Statement(row) {
   Statement(..statement, label: Some(label))
 }
 
-/// The SQL text and arguments, with placeholders written by `placeholder`:
-/// `$1` for Postgres, `?` for SQLite and MySQL.
+/// The SQL text and arguments, with placeholders and identifiers written
+/// for `dialect`.
 pub fn render(
   statement: Statement(row),
-  placeholder: fn(Int) -> String,
+  dialect: Dialect,
 ) -> #(String, List(Value)) {
   let text =
     list.fold(statement.parts, [], fn(acc, part) {
       case part {
         Sql(sql) -> [sql, ..acc]
-        Placeholder(n) -> [placeholder(n), ..acc]
+        Placeholder(n) -> [placeholder(dialect, n), ..acc]
+        Identifier(name) -> [quote(dialect, name), ..acc]
       }
     })
     |> string_tree.from_strings
     |> string_tree.to_string
   #(text, list.reverse(statement.args))
+}
+
+fn placeholder(dialect: Dialect, n: Int) -> String {
+  case dialect {
+    Postgres -> "$" <> int.to_string(n)
+    Mysql -> "?"
+    Sqlite -> "?" <> int.to_string(n)
+  }
+}
+
+/// Each dot-separated part quoted, with the quote character doubled inside.
+fn quote(dialect: Dialect, name: String) -> String {
+  let mark = case dialect {
+    Mysql -> "`"
+    Postgres | Sqlite -> "\""
+  }
+  string.split(name, ".")
+  |> list.map(fn(part) {
+    mark <> string.replace(part, mark, mark <> mark) <> mark
+  })
+  |> string.join(".")
 }
 
 /// What to call a statement in traces: its `label`, or else the first word

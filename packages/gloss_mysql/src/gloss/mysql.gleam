@@ -246,7 +246,7 @@ pub fn on_connect(config: Config, sql: String) -> Config {
 /// The driver to give to `pool.new`.
 pub fn driver(config: Config) -> pool.Driver {
   let settings = settings(config)
-  pool.Driver(name: "mysql", placeholder: fn(_) { "?" }, connect: fn() {
+  pool.Driver(name: "mysql", dialect: sql.Mysql, connect: fn() {
     use connection <- result.map(connection.open(
       settings,
       config.statement_cache,
@@ -301,7 +301,7 @@ pub fn insert_id(
   db: pool.Db,
   statement: sql.Statement(a),
 ) -> Result(Int, sql.Error) {
-  let #(text, args) = sql.render(statement, fn(_) { "?" })
+  let #(text, args) = sql.render(statement, sql.Mysql)
   use connection, timeout <- pool.borrow(db, sql.name(statement, text))
   use connection <- result.try(from_raw(connection))
   connection.run(connection, text, args, timeout)
