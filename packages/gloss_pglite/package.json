@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "description": "JavaScript dependencies for gloss_pglite's tests; applications install @electric-sql/pglite themselves",
+  "dependencies": {
+    "@electric-sql/pglite": "0.5.8"
+  }
+}
