@@ -1,14 +1,14 @@
 //// SQLite in the browser and other JavaScript runtimes, on the official
 //// SQLite WebAssembly build (`@sqlite.org/sqlite-wasm`). It opens an
-//// `sql_async.Database` that runs the same `gloss/sql` statements the server
+//// `async.Database` that runs the same `gloss/sql` statements the server
 //// does.
 ////
 //// ```gleam
 //// use db <- promise.try_await(wasm.open(wasm.memory()))
-//// use _ <- promise.try_await(sql_async.script(db, schema))
+//// use _ <- promise.try_await(async.script(db, schema))
 //// sql.query("select id, title from notes order by id desc")
 //// |> sql.returning(note_decoder())
-//// |> sql_async.all(db, _)
+//// |> async.all(db, _)
 //// ```
 ////
 //// Install the JavaScript package alongside your app:
@@ -37,8 +37,8 @@ import gleam/javascript/promise.{type Promise}
 import gleam/list
 import gleam/result
 import gloss/sql.{type Value}
+import gloss/sql/async.{type Database}
 import gloss/sql/internal/sqlite.{type Cell}
-import gloss/sql_async.{type Database}
 
 /// Where the database lives.
 pub opaque type Config {
@@ -71,7 +71,7 @@ pub fn open(config: Config) -> Promise(Result(Database, sql.Error)) {
   }
   use opened <- promise.map(opened)
   use handle <- result.map(opened |> result.map_error(sql.ConnectionFailed))
-  sql_async.database(
+  async.database(
     name: "sqlite",
     dialect: sql.Sqlite,
     run: fn(text, args) { promise.resolve(run(handle, text, args)) },
@@ -102,22 +102,22 @@ fn failure(error: #(Int, String)) -> sql.Error {
   sqlite.error(error.0, error.1)
 }
 
-@external(javascript, "./sqlite_wasm_ffi.mjs", "open")
+@external(javascript, "./wasm_ffi.mjs", "open")
 fn ffi_open(
   kind: String,
   name: String,
   directory: String,
 ) -> Promise(Result(Handle, String))
 
-@external(javascript, "./sqlite_wasm_ffi.mjs", "run")
+@external(javascript, "./wasm_ffi.mjs", "run")
 fn ffi_run(
   handle: Handle,
   sql: String,
   args: List(Cell),
 ) -> Result(#(List(String), List(List(Cell)), Int), #(Int, String))
 
-@external(javascript, "./sqlite_wasm_ffi.mjs", "script")
+@external(javascript, "./wasm_ffi.mjs", "script")
 fn ffi_script(handle: Handle, sql: String) -> Result(Nil, #(Int, String))
 
-@external(javascript, "./sqlite_wasm_ffi.mjs", "close")
+@external(javascript, "./wasm_ffi.mjs", "close")
 fn ffi_close(handle: Handle) -> Nil

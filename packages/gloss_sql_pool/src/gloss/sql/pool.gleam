@@ -50,11 +50,12 @@ import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import gleam/string
 import gleam/time/duration.{type Duration}
-import gloss/internal/sql_pool.{type Lease}
 import gloss/meta
 import gloss/sql.{
   type Error, type Outcome, type Statement, type TransactionError, type Value,
 }
+import gloss/sql/pool/internal/manager.{type Lease}
+import gloss/store
 import gloss/tracer.{type SpanContext, type Tracer}
 
 // --- Drivers -----------------------------------------------------------------
@@ -112,7 +113,7 @@ pub type Connection {
 // --- The pool ----------------------------------------------------------------
 
 type PoolMessage =
-  sql_pool.Message(Connection, Error)
+  manager.Message(Connection, Error)
 
 /// How to run a pool. Build one with `new` and the setters, then `start` or
 /// `supervised` it.
@@ -227,7 +228,7 @@ pub fn db(builder: Builder) -> Db {
 
 /// Close every connection and stop the pool.
 pub fn shutdown(db: Db) -> Nil {
-  sql_pool.shutdown(db.pool)
+  manager.shutdown(db.pool)
 }
 
 /// Report this handle's statements as children of `parent`, e.g. the span
@@ -241,14 +242,14 @@ fn start_pool(
   builder: Builder,
 ) -> Result(actor.Started(Subject(PoolMessage)), actor.StartError) {
   let ops =
-    sql_pool.Ops(
+    manager.Ops(
       connect: builder.driver.connect,
       alive: fn(connection: Connection) { connection.alive() },
       transfer: fn(connection: Connection, pid) { connection.transfer(pid) },
       close: fn(connection: Connection) { connection.close() },
       crashed: sql.ConnectionFailed,
     )
-  sql_pool.start(ops, builder.pool_size, builder.name)
+  manager.start(ops, builder.pool_size, builder.name)
 }
 
 // --- Running statements ------------------------------------------------------
@@ -341,6 +342,15 @@ fn run(db: Db, statement: Statement(row)) -> Result(Outcome, Error) {
   }
 }
 
+// --- Stores ------------------------------------------------------------------
+
+/// Answer a `gloss/store` message with a statement's result. A database
+/// error answers `Unavailable` with its description, so map the errors
+/// that are business outcomes, such as a `sql.UniqueViolation`, first.
+pub fn reply(result: Result(a, Error), to reply: store.Reply(a)) -> Nil {
+  store.reply(result.map_error(result, sql.describe), to: reply)
+}
+
 // --- Transactions ------------------------------------------------------------
 
 /// Run `body` in a transaction: commit when it returns `Ok`, roll back when
@@ -369,7 +379,7 @@ pub fn transaction(
     }
     None ->
       case
-        sql_pool.checkout(
+        manager.checkout(
           db.pool,
           db.checkout_timeout,
           unavailable: sql.Unavailable,
@@ -380,11 +390,11 @@ pub fn transaction(
         Ok(lease) ->
           case rescue(fn() { transact(db, lease, 0, new_counter(), body) }) {
             Ok(#(result, reuse)) -> {
-              sql_pool.checkin(db.pool, lease, reuse)
+              manager.checkin(db.pool, lease, reuse)
               result
             }
             Error(crash) -> {
-              sql_pool.checkin(db.pool, lease, False)
+              manager.checkin(db.pool, lease, False)
               reraise(crash)
             }
           }
@@ -521,7 +531,7 @@ fn with_connection(
       work(lease.connection, owed)
     }
     None -> {
-      use lease <- result.try(sql_pool.checkout(
+      use lease <- result.try(manager.checkout(
         db.pool,
         db.checkout_timeout,
         unavailable: sql.Unavailable,
@@ -533,11 +543,11 @@ fn with_connection(
             Ok(_) -> True
             Error(error) -> reusable(error)
           }
-          sql_pool.checkin(db.pool, lease, reuse)
+          manager.checkin(db.pool, lease, reuse)
           result
         }
         Error(crash) -> {
-          sql_pool.checkin(db.pool, lease, False)
+          manager.checkin(db.pool, lease, False)
           reraise(crash)
         }
       }
@@ -601,20 +611,20 @@ fn in_parent(db: Db, work: fn() -> a) -> a {
 
 type Crash
 
-@external(erlang, "gloss@sql_ffi", "rescue")
+@external(erlang, "gloss@sql@pool_ffi", "rescue")
 fn rescue(work: fn() -> a) -> Result(a, Crash)
 
-@external(erlang, "gloss@sql_ffi", "reraise")
+@external(erlang, "gloss@sql@pool_ffi", "reraise")
 fn reraise(crash: Crash) -> a
 
 /// A mutable integer, shared by every handle on one transaction.
 type Counter
 
-@external(erlang, "gloss@sql_ffi", "new_counter")
+@external(erlang, "gloss@sql@pool_ffi", "new_counter")
 fn new_counter() -> Counter
 
-@external(erlang, "gloss@sql_ffi", "get")
+@external(erlang, "gloss@sql@pool_ffi", "get")
 fn get(counter: Counter) -> Int
 
-@external(erlang, "gloss@sql_ffi", "put")
+@external(erlang, "gloss@sql@pool_ffi", "put")
 fn put(counter: Counter, value: Int) -> Nil

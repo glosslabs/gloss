@@ -310,7 +310,7 @@ fn rescue(work: fn() -> a) -> Result(a, String) {
 
 type Crash
 
-@external(erlang, "gloss@sql_ffi", "rescue")
+@external(erlang, "gloss@sql@pool_ffi", "rescue")
 fn rescue_crash(work: fn() -> a) -> Result(a, Crash)
 
 @external(erlang, "erlang", "element")

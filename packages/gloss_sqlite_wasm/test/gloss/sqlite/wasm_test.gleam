@@ -4,8 +4,8 @@ import gleam/option.{type Option, None, Some}
 import gleam/time/calendar
 import gleam/time/timestamp
 import gloss/sql
-import gloss/sql_async.{type Database}
-import gloss/sqlite_wasm
+import gloss/sql/async.{type Database}
+import gloss/sqlite/wasm
 
 const schema =
   "
@@ -26,12 +26,12 @@ const schema =
   );"
 
 fn with_db(test_: fn(Database) -> Promise(Nil)) -> Promise(Nil) {
-  use opened <- promise.await(sqlite_wasm.open(sqlite_wasm.memory()))
+  use opened <- promise.await(wasm.open(wasm.memory()))
   let assert Ok(db) = opened
-  use created <- promise.await(sql_async.script(db, schema))
+  use created <- promise.await(async.script(db, schema))
   let assert Ok(Nil) = created
   use _ <- promise.await(test_(db))
-  sql_async.close(db)
+  async.close(db)
 }
 
 type User {
@@ -61,7 +61,7 @@ fn insert(db: Database, email: String) -> Promise(Result(Int, sql.Error)) {
   |> sql.bind(sql.Bytes(<<0, 1, 255>>))
   |> sql.bind(sql.Float(9.5))
   |> sql.returning(decode.at([0], decode.int))
-  |> sql_async.one(db, _)
+  |> async.one(db, _)
 }
 
 pub fn values_round_trip_test() -> Promise(Nil) {
@@ -90,7 +90,7 @@ pub fn values_round_trip_test() -> Promise(Nil) {
         score:,
       ))
     })
-    |> sql_async.one(db, _),
+    |> async.one(db, _),
   )
   assert user
     == Ok(User(
@@ -109,7 +109,7 @@ pub fn affected_rows_and_nulls_test() -> Promise(Nil) {
   use db <- with_db
   use _ <- promise.await(insert(db, "a@x"))
   use _ <- promise.await(insert(db, "b@x"))
-  use updated <- promise.await(sql_async.exec(
+  use updated <- promise.await(async.exec(
     db,
     sql.query("update users set joined = null"),
   ))
@@ -117,7 +117,7 @@ pub fn affected_rows_and_nulls_test() -> Promise(Nil) {
   use joined <- promise.await(
     sql.query("select joined from users")
     |> sql.returning(decode.at([0], decode.optional(sql.timestamp_decoder())))
-    |> sql_async.all(db, _),
+    |> async.all(db, _),
   )
   assert joined == Ok([None, None])
   promise.resolve(Nil)
@@ -133,16 +133,13 @@ pub fn constraint_errors_are_typed_test() -> Promise(Nil) {
     sql.query("insert into posts (user_id, likes) values (?1, ?2)")
     |> sql.bind(sql.Int(user))
     |> sql.bind(sql.Int(likes))
-    |> sql_async.exec(db, _)
+    |> async.exec(db, _)
   }
   use orphan <- promise.await(post(id + 100, 1))
   let assert Error(sql.ForeignKeyViolation(..)) = orphan
   use negative <- promise.await(post(id, -1))
   let assert Error(sql.CheckViolation(..)) = negative
-  use missing <- promise.await(sql_async.exec(
-    db,
-    sql.query("select * from nope"),
-  ))
+  use missing <- promise.await(async.exec(db, sql.query("select * from nope")))
   let assert Error(sql.QueryFailed(..)) = missing
   promise.resolve(Nil)
 }
@@ -150,10 +147,10 @@ pub fn constraint_errors_are_typed_test() -> Promise(Nil) {
 pub fn transactions_roll_back_test() -> Promise(Nil) {
   use db <- with_db
   use result <- promise.await(
-    sql_async.transaction(db, fn(tx) {
+    async.transaction(db, fn(tx) {
       use _ <- promise.try_await(insert(tx, "kept@x"))
       use inner <- promise.await(
-        sql_async.transaction(tx, fn(inner) {
+        async.transaction(tx, fn(inner) {
           use _ <- promise.await(insert(inner, "dropped@x"))
           promise.resolve(Error("undo"))
         }),
@@ -166,14 +163,14 @@ pub fn transactions_roll_back_test() -> Promise(Nil) {
   use emails <- promise.await(
     sql.query("select email from users")
     |> sql.returning(decode.at([0], decode.string))
-    |> sql_async.all(db, _),
+    |> async.all(db, _),
   )
   assert emails == Ok(["kept@x"])
   promise.resolve(Nil)
 }
 
 pub fn opfs_is_refused_outside_a_browser_test() -> Promise(Nil) {
-  use opened <- promise.await(sqlite_wasm.open(sqlite_wasm.opfs("app.db")))
+  use opened <- promise.await(wasm.open(wasm.opfs("app.db")))
   let assert Error(sql.ConnectionFailed(_)) = opened
   promise.resolve(Nil)
 }

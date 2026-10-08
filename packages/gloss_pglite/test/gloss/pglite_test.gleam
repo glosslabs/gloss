@@ -6,7 +6,7 @@ import gleam/time/calendar
 import gleam/time/timestamp
 import gloss/pglite
 import gloss/sql
-import gloss/sql_async.{type Database}
+import gloss/sql/async.{type Database}
 
 const schema =
   "
@@ -32,10 +32,10 @@ const schema =
 fn with_db(test_: fn(Database) -> Promise(Nil)) -> Promise(Nil) {
   use opened <- promise.await(pglite.open(pglite.memory()))
   let assert Ok(db) = opened
-  use created <- promise.await(sql_async.script(db, schema))
+  use created <- promise.await(async.script(db, schema))
   let assert Ok(Nil) = created
   use _ <- promise.await(test_(db))
-  sql_async.close(db)
+  async.close(db)
 }
 
 type User {
@@ -77,7 +77,7 @@ fn insert(db: Database, email: String) -> Promise(Result(Int, sql.Error)) {
   |> sql.bind(sql.Array([sql.Text("x"), sql.Text("y z")]))
   |> sql.bind(sql.Int(9_007_199_254_740_991))
   |> sql.returning(decode.at([0], decode.int))
-  |> sql_async.one(db, _)
+  |> async.one(db, _)
 }
 
 pub fn values_round_trip_like_gloss_pg_test() -> Promise(Nil) {
@@ -114,7 +114,7 @@ pub fn values_round_trip_like_gloss_pg_test() -> Promise(Nil) {
         big:,
       ))
     })
-    |> sql_async.one(db, _),
+    |> async.one(db, _),
   )
   assert user
     == Ok(User(
@@ -140,7 +140,7 @@ pub fn affected_rows_and_nulls_test() -> Promise(Nil) {
   use db <- with_db
   use _ <- promise.await(insert(db, "a@x"))
   use _ <- promise.await(insert(db, "b@x"))
-  use updated <- promise.await(sql_async.exec(
+  use updated <- promise.await(async.exec(
     db,
     sql.query("update users set joined = null"),
   ))
@@ -148,7 +148,7 @@ pub fn affected_rows_and_nulls_test() -> Promise(Nil) {
   use joined <- promise.await(
     sql.query("select joined from users")
     |> sql.returning(decode.at([0], decode.optional(sql.timestamp_decoder())))
-    |> sql_async.all(db, _),
+    |> async.all(db, _),
   )
   assert joined == Ok([None, None])
   promise.resolve(Nil)
@@ -165,7 +165,7 @@ pub fn constraint_errors_are_typed_test() -> Promise(Nil) {
     sql.query("insert into posts (user_id, likes) values ($1, $2)")
     |> sql.bind(sql.Int(user))
     |> sql.bind(sql.Int(likes))
-    |> sql_async.exec(db, _)
+    |> async.exec(db, _)
   }
   use orphan <- promise.await(post(id + 100, 1))
   let assert Error(sql.ForeignKeyViolation(constraint: "posts_user_id_fkey", ..)) =
@@ -173,15 +173,12 @@ pub fn constraint_errors_are_typed_test() -> Promise(Nil) {
   use negative <- promise.await(post(id, -1))
   let assert Error(sql.CheckViolation(constraint: "posts_likes_check", ..)) =
     negative
-  use null <- promise.await(sql_async.exec(
+  use null <- promise.await(async.exec(
     db,
     sql.query("insert into users (email) values (null)"),
   ))
   let assert Error(sql.NotNullViolation(column: "email", ..)) = null
-  use missing <- promise.await(sql_async.exec(
-    db,
-    sql.query("select * from nope"),
-  ))
+  use missing <- promise.await(async.exec(db, sql.query("select * from nope")))
   let assert Error(sql.QueryFailed(code: "42P01", ..)) = missing
   promise.resolve(Nil)
 }
@@ -189,10 +186,10 @@ pub fn constraint_errors_are_typed_test() -> Promise(Nil) {
 pub fn transactions_and_savepoints_test() -> Promise(Nil) {
   use db <- with_db
   use result <- promise.await(
-    sql_async.transaction(db, fn(tx) {
+    async.transaction(db, fn(tx) {
       use _ <- promise.try_await(insert(tx, "kept@x"))
       use inner <- promise.await(
-        sql_async.transaction(tx, fn(inner) {
+        async.transaction(tx, fn(inner) {
           use _ <- promise.await(insert(inner, "dropped@x"))
           promise.resolve(Error("undo"))
         }),
@@ -205,7 +202,7 @@ pub fn transactions_and_savepoints_test() -> Promise(Nil) {
   use emails <- promise.await(
     sql.query("select email from users")
     |> sql.returning(decode.at([0], decode.string))
-    |> sql_async.all(db, _),
+    |> async.all(db, _),
   )
   assert emails == Ok(["kept@x"])
   promise.resolve(Nil)
@@ -213,7 +210,7 @@ pub fn transactions_and_savepoints_test() -> Promise(Nil) {
 
 pub fn types_made_later_are_read_as_text_test() -> Promise(Nil) {
   use db <- with_db
-  use _ <- promise.await(sql_async.script(
+  use _ <- promise.await(async.script(
     db,
     "create type mood as enum ('happy', 'sad');
      create table moods (m mood, ms mood[]);
@@ -226,7 +223,7 @@ pub fn types_made_later_are_read_as_text_test() -> Promise(Nil) {
       use ms <- decode.field(1, decode.string)
       decode.success(#(m, ms))
     })
-    |> sql_async.one(db, _),
+    |> async.one(db, _),
   )
   assert moods == Ok(#("happy", "{happy,sad}"))
   promise.resolve(Nil)
@@ -236,20 +233,20 @@ pub fn directories_persist_test() -> Promise(Nil) {
   let dir = "build/test-pglite-" <> int.to_string(unique())
   use opened <- promise.await(pglite.open(pglite.directory(dir)))
   let assert Ok(db) = opened
-  use _ <- promise.await(sql_async.script(
+  use _ <- promise.await(async.script(
     db,
     "create table kept (n int); insert into kept values (42);",
   ))
-  use _ <- promise.await(sql_async.close(db))
+  use _ <- promise.await(async.close(db))
   use opened <- promise.await(pglite.open(pglite.directory(dir)))
   let assert Ok(db) = opened
   use kept <- promise.await(
     sql.query("select n from kept")
     |> sql.returning(decode.at([0], decode.int))
-    |> sql_async.one(db, _),
+    |> async.one(db, _),
   )
   assert kept == Ok(42)
-  sql_async.close(db)
+  async.close(db)
 }
 
 @external(javascript, "../pglite_test_ffi.mjs", "unique")

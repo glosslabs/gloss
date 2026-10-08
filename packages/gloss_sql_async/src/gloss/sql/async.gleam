@@ -1,11 +1,11 @@
 //// Running `gloss/sql` statements in JavaScript, where databases answer
 //// asynchronously, so every call returns a `Promise`. This is the browser's
-//// counterpart to `gloss/sql/pool`: drivers such as `gloss/sqlite_wasm`
+//// counterpart to `gloss/sql/pool`: drivers such as `gloss/sqlite/wasm`
 //// and `gloss/pglite` open a `Database`, and the same statements and
 //// decoders the server uses run on it.
 ////
 //// ```gleam
-//// use db <- promise.try_await(sqlite_wasm.open(sqlite_wasm.memory()))
+//// use db <- promise.try_await(wasm.open(wasm.memory()))
 //// sql.query("select id, title from threads order by id desc limit ?1")
 //// |> sql.bind(sql.Int(20))
 //// |> sql.returning(thread_decoder())
@@ -182,14 +182,14 @@ pub fn transaction(
 
 type Reason
 
-@external(javascript, "./sql_async_ffi.mjs", "new_queue")
+@external(javascript, "./async_ffi.mjs", "new_queue")
 fn new_queue() -> Queue
 
-@external(javascript, "./sql_async_ffi.mjs", "enqueue")
+@external(javascript, "./async_ffi.mjs", "enqueue")
 fn enqueue(queue: Queue, task: fn() -> Promise(a)) -> Promise(a)
 
-@external(javascript, "./sql_async_ffi.mjs", "settle")
+@external(javascript, "./async_ffi.mjs", "settle")
 fn settle(task: fn() -> Promise(a)) -> Promise(Result(a, Reason))
 
-@external(javascript, "./sql_async_ffi.mjs", "reject")
+@external(javascript, "./async_ffi.mjs", "reject")
 fn reject(reason: Reason) -> Promise(a)

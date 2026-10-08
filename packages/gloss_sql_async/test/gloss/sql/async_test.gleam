@@ -3,26 +3,26 @@ import gleam/javascript/promise.{type Promise}
 import gleam/list
 import gleam/string
 import gloss/sql
-import gloss/sql_async
+import gloss/sql/async
 
 type Log
 
-@external(javascript, "../fake_ffi.mjs", "new_log")
+@external(javascript, "../../fake_ffi.mjs", "new_log")
 fn new_log() -> Log
 
-@external(javascript, "../fake_ffi.mjs", "push")
+@external(javascript, "../../fake_ffi.mjs", "push")
 fn push(log: Log, entry: String) -> Nil
 
-@external(javascript, "../fake_ffi.mjs", "entries")
+@external(javascript, "../../fake_ffi.mjs", "entries")
 fn entries(log: Log) -> List(String)
 
-@external(javascript, "../fake_ffi.mjs", "delay")
+@external(javascript, "../../fake_ffi.mjs", "delay")
 fn delay(ms: Int) -> Promise(Nil)
 
 /// A database that logs each statement when it starts and when it ends,
 /// taking `ms` to answer. `select n` returns n; `fail` fails.
-fn fake(log: Log, ms: Int) -> sql_async.Database {
-  sql_async.database(
+fn fake(log: Log, ms: Int) -> async.Database {
+  async.database(
     name: "fake",
     dialect: sql.Postgres,
     run: fn(text, args) {
@@ -54,13 +54,13 @@ fn number(n: Int) -> sql.Statement(Int) {
 
 pub fn statements_decode_rows_test() -> Promise(Nil) {
   let db = fake(new_log(), 0)
-  use one <- promise.await(sql_async.one(db, number(7)))
+  use one <- promise.await(async.one(db, number(7)))
   assert one == Ok(7)
-  use all <- promise.await(sql_async.all(db, number(8)))
+  use all <- promise.await(async.all(db, number(8)))
   assert all == Ok([8])
-  use affected <- promise.await(sql_async.exec(db, sql.query("update")))
+  use affected <- promise.await(async.exec(db, sql.query("update")))
   assert affected == Ok(3)
-  use failed <- promise.await(sql_async.one(db, sql.query("fail")))
+  use failed <- promise.await(async.one(db, sql.query("fail")))
   let assert Error(sql.QueryFailed(..)) = failed
   promise.resolve(Nil)
 }
@@ -70,8 +70,8 @@ pub fn calls_run_one_at_a_time_in_order_test() -> Promise(Nil) {
   let db = fake(log, 5)
   use _ <- promise.await(
     promise.await_list([
-      sql_async.exec(db, sql.query("a")),
-      sql_async.exec(db, sql.query("b")),
+      async.exec(db, sql.query("a")),
+      async.exec(db, sql.query("b")),
     ]),
   )
   assert entries(log) == ["start a", "end a", "start b", "end b"]
@@ -82,12 +82,12 @@ pub fn other_calls_wait_for_a_transaction_test() -> Promise(Nil) {
   let log = new_log()
   let db = fake(log, 5)
   let tx =
-    sql_async.transaction(db, fn(tx) {
-      use _ <- promise.try_await(sql_async.exec(tx, sql.query("in tx 1")))
-      sql_async.exec(tx, sql.query("in tx 2"))
+    async.transaction(db, fn(tx) {
+      use _ <- promise.try_await(async.exec(tx, sql.query("in tx 1")))
+      async.exec(tx, sql.query("in tx 2"))
     })
   // Made while the transaction is open: it must not run inside it.
-  let outside = sql_async.exec(db, sql.query("outside"))
+  let outside = async.exec(db, sql.query("outside"))
   use result <- promise.await(tx)
   assert result == Ok(3)
   use _ <- promise.await(outside)
@@ -103,10 +103,10 @@ pub fn errors_roll_back_and_nest_as_savepoints_test() -> Promise(Nil) {
   let log = new_log()
   let db = fake(log, 0)
   use result <- promise.await(
-    sql_async.transaction(db, fn(tx) {
+    async.transaction(db, fn(tx) {
       use inner <- promise.await(
-        sql_async.transaction(tx, fn(inner) {
-          use _ <- promise.await(sql_async.exec(inner, sql.query("x")))
+        async.transaction(tx, fn(inner) {
+          use _ <- promise.await(async.exec(inner, sql.query("x")))
           promise.resolve(Error("undo"))
         }),
       )
@@ -129,14 +129,14 @@ pub fn a_failing_body_rolls_back_and_frees_the_queue_test() -> Promise(Nil) {
   let db = fake(log, 0)
   use rejected <- promise.await(
     promise.rescue(
-      sql_async.transaction(db, fn(_tx) { panic as "boom" })
+      async.transaction(db, fn(_tx) { panic as "boom" })
         |> promise.map(fn(_) { "resolved" }),
       fn(_) { "rejected" },
     ),
   )
   assert rejected == "rejected"
   // The database still answers.
-  use after <- promise.await(sql_async.one(db, number(1)))
+  use after <- promise.await(async.one(db, number(1)))
   assert after == Ok(1)
   assert list.take(entries(log), 2) == ["BEGIN", "ROLLBACK"]
   promise.resolve(Nil)

@@ -1,4 +1,4 @@
--module(gloss@sql_ffi).
+-module(gloss@sql@pool_ffi).
 -export([rescue/1, reraise/1, new_counter/0, get/1, put/2]).
 
 %% Run F, turning an exception into {error, Crash} so the caller can clean up

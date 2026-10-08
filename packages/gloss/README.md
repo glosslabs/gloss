@@ -32,7 +32,6 @@ pub fn main() {
 | `gloss/http/csrf`, `cors`, `secure_headers` | Protection middleware |
 | `gloss/http/static`, `compress`, `sse`, `websocket` | Files, gzip, server-sent events, WebSockets |
 | `gloss/http/traceparent`, `debug_bar` | W3C trace context; a development panel for each page |
-| `gloss/sql/pool` | Runs [`gloss/sql`](../gloss_sql) statements on a connection pool from a driver |
 | `gloss/store` | Storage messages answered by a database or memory adapter |
 | `gloss/tracer`, `logger`, `logger/file`, `meta` | Spans and points; structured logging |
 | `gloss/scheduler` | Interval and cron tasks |

@@ -7,6 +7,7 @@ extra_applications = ["crypto"]
 
 [dependencies]
 gloss_sql = { path = "../../packages/gloss_sql" }
+gloss_sql_pool = { path = "../../packages/gloss_sql_pool" }
 gloss = { path = "../../packages/gloss" }
 gloss_sentry = { path = "../../packages/gloss_sentry" }
 gloss_otel = { path = "../../packages/gloss_otel" }

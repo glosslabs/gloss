@@ -14,6 +14,7 @@ envoy = ">= 1.2.0 and < 2.0.0"
 argv = ">= 1.1.0 and < 2.0.0"
 gloss = { path = "../../packages/gloss" }
 gloss_sql = { path = "../../packages/gloss_sql" }
+gloss_sql_pool = { path = "../../packages/gloss_sql_pool" }
 gloss_url = { path = "../../packages/gloss_url" }
 gloss_pg = { path = "../../packages/gloss_pg" }
 gloss_mysql = { path = "../../packages/gloss_mysql" }

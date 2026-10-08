@@ -301,7 +301,7 @@ pub fn failed_statements_are_failed_spans_test() {
     process.receive(spans, 100)
 }
 
-@external(erlang, "gloss@sql_ffi", "rescue")
+@external(erlang, "gloss@sql@pool_ffi", "rescue")
 fn rescue(work: fn() -> a) -> Result(a, b)
 
 pub fn statements_join_the_current_span_test() {

@@ -25,6 +25,7 @@ jobs:
           - project: packages/gloss
           - project: packages/gloss_sql
             js: true
+          - project: packages/gloss_sql_pool
           - project: packages/gloss_url
             js: true
           - project: packages/gloss_sql_async

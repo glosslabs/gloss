@@ -1,7 +1,6 @@
 import gleam/erlang/atom
 import gleam/erlang/process
 import gleam/otp/static_supervisor as supervisor
-import gloss/sql
 import gloss/store.{type Reply, Unavailable}
 
 type Message {
@@ -113,16 +112,16 @@ pub fn a_named_store_is_reachable_from_its_name_test() {
   assert store.call(store.from_name(name), Add(4, _)) == 4
 }
 
-pub fn reply_turns_sql_errors_into_unavailable_test() {
+pub fn reply_turns_errors_into_unavailable_test() {
   let reply = process.new_subject()
   store.reply(Ok(1), to: reply)
-  store.reply(Error(sql.PoolTimeout), to: reply)
+  store.reply(Error("timed out waiting for a connection"), to: reply)
   assert process.receive(reply, 0) == Ok(Ok(1))
   assert process.receive(reply, 0)
     == Ok(Error(Unavailable("timed out waiting for a connection")))
 }
 
-@external(erlang, "gloss@sql_ffi", "rescue")
+@external(erlang, "gloss@http@server_ffi", "rescue")
 fn rescue(work: fn() -> a) -> Result(a, b)
 
 fn monotonic_ms() -> Int {

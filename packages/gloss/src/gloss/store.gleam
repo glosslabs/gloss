@@ -39,7 +39,8 @@
 ////
 //// Storage failing (the database being down) is rarely something the
 //// caller can act on, so it is not part of a message's answer type: an
-//// adapter's `sql.Error` is answered as `Unavailable(reason)` and `call`
+//// adapter answers it as `Unavailable(reason)` (`pool.reply` does this for
+//// a `sql.Error`) and `call`
 //// panics with the reason. In a request handler that becomes a 500 that is
 //// logged and traced. Business outcomes, such as an email already being
 //// taken, belong in the answer itself.
@@ -49,7 +50,6 @@ import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
-import gloss/sql
 
 /// Something that answers `message`s.
 pub opaque type Store(message) {
@@ -158,14 +158,11 @@ pub fn call(store: Store(message), make: fn(Reply(a)) -> message) -> a {
 
 const timeout = 10_000
 
-/// Answer a message. A database error becomes `Unavailable`, so map the
-/// errors that are business outcomes, such as a `sql.UniqueViolation`,
-/// first. A store held in memory answers `Ok(value)`.
-pub fn reply(result: Result(a, sql.Error), to reply: Reply(a)) -> Nil {
-  process.send(
-    reply,
-    result.map_error(result, fn(error) { Unavailable(sql.describe(error)) }),
-  )
+/// Answer a message: `Ok(value)`, or `Error(reason)` when storage failed,
+/// which the caller gets as `Unavailable(reason)`. A store over a database
+/// answers with `pool.reply`, which describes its `sql.Error`.
+pub fn reply(result: Result(a, String), to reply: Reply(a)) -> Nil {
+  process.send(reply, result.map_error(result, Unavailable))
 }
 
 fn register(

@@ -8,8 +8,8 @@ import gleam/time/timestamp
 import gloss/pglite
 import gloss/sql
 import gloss/sql/internal/postgres
-import gloss/sql_async.{type Database}
-import gloss/sqlite_wasm
+import gloss/sql/async.{type Database}
+import gloss/sqlite/wasm
 import gloss/url
 
 pub fn main() -> Promise(Nil) {
@@ -53,9 +53,9 @@ pub fn main() -> Promise(Nil) {
     url.encode(string.repeat("héllo wörld/", 10))
   })
 
-  use opened <- promise.await(sqlite_wasm.open(sqlite_wasm.memory()))
+  use opened <- promise.await(wasm.open(wasm.memory()))
   let assert Ok(db) = opened
-  use _ <- promise.await(database("gloss/sqlite_wasm (memory)", db, "?1", "integer"))
+  use _ <- promise.await(database("gloss/sqlite/wasm (memory)", db, "?1", "integer"))
   use opened <- promise.await(pglite.open(pglite.memory()))
   let assert Ok(db) = opened
   database("gloss/pglite (memory)", db, "$1", "serial")
@@ -68,7 +68,7 @@ fn database(
   key_type: String,
 ) -> Promise(Nil) {
   section(title)
-  use _ <- promise.await(sql_async.script(
+  use _ <- promise.await(async.script(
     db,
     "create table bench_users (id "
       <> key_type
@@ -81,12 +81,12 @@ fn database(
     |> sql.bind(sql.Text("user" <> int.to_string(n) <> "@example.com"))
   }
   use _ <- promise.await(
-    sql_async.transaction(db, fn(tx) {
+    async.transaction(db, fn(tx) {
       list.repeat(Nil, 1000)
       |> list.index_map(fn(_, n) { n })
       |> list.fold(promise.resolve(Ok(0)), fn(acc, n) {
         use _ <- promise.try_await(acc)
-        sql_async.exec(tx, insert(n))
+        async.exec(tx, insert(n))
       })
     }),
   )
@@ -102,16 +102,16 @@ fn database(
     })
   use _ <- promise.await(
     bench_async("select 1", 2000, fn() {
-      sql_async.one(db, sql.query("select 1") |> sql.returning(decode.at([0], decode.int)))
+      async.one(db, sql.query("select 1") |> sql.returning(decode.at([0], decode.int)))
     }),
   )
   use _ <- promise.await(
-    bench_async("select a row by id", 2000, fn() { sql_async.one(db, find) }),
+    bench_async("select a row by id", 2000, fn() { async.one(db, find) }),
   )
   use _ <- promise.await(
-    bench_async("insert a row", 1000, fn() { sql_async.exec(db, insert(0)) }),
+    bench_async("insert a row", 1000, fn() { async.exec(db, insert(0)) }),
   )
-  sql_async.close(db)
+  async.close(db)
 }
 
 @external(javascript, "./harness_ffi.mjs", "bench")

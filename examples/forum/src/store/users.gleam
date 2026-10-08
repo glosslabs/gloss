@@ -18,12 +18,12 @@ import gloss/store.{type Store}
 pub fn new(db: pool.Db) -> Store(Message) {
   store.inline(fn(message) {
     case message {
-      Insert(user:, reply:) -> insert(db, user) |> store.reply(reply)
-      Get(id:, reply:) -> get(db, id) |> store.reply(reply)
-      GetMany(ids:, reply:) -> get_many(db, ids) |> store.reply(reply)
+      Insert(user:, reply:) -> insert(db, user) |> pool.reply(reply)
+      Get(id:, reply:) -> get(db, id) |> pool.reply(reply)
+      GetMany(ids:, reply:) -> get_many(db, ids) |> pool.reply(reply)
       FindByEmail(email:, reply:) ->
-        find_by_email(db, email) |> store.reply(reply)
-      Save(user:, reply:) -> save(db, user) |> store.reply(reply)
+        find_by_email(db, email) |> pool.reply(reply)
+      Save(user:, reply:) -> save(db, user) |> pool.reply(reply)
     }
   })
 }

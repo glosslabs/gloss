@@ -26,7 +26,7 @@
 //// declared `BOOLEAN`, `TIMESTAMP` or `DATETIME`, `DATE`, `TIME` or `BLOB`
 //// gives the matching Gleam value; other columns give what SQLite stored.
 //// SQLite has no arrays. The same rules apply in the browser driver,
-//// `gloss/sqlite_wasm`, so statements and decoders can be shared.
+//// `gloss/sqlite/wasm`, so statements and decoders can be shared.
 ////
 //// ## Timeouts
 ////

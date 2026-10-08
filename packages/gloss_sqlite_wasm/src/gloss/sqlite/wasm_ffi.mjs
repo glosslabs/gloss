@@ -1,12 +1,12 @@
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
-import { Ok, Error as GError, BitArray, toList } from "../gleam.mjs";
+import { Ok, Error as GError, BitArray, toList } from "../../gleam.mjs";
 import {
   Null,
   Integer,
   Real,
   Text,
   Blob,
-} from "../../gloss_sql/gloss/sql/internal/sqlite.mjs";
+} from "../../../gloss_sql/gloss/sql/internal/sqlite.mjs";
 
 let loaded;
 

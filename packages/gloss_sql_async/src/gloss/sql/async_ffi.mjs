@@ -1,4 +1,4 @@
-import { Ok, Error } from "../gleam.mjs";
+import { Ok, Error } from "../../gleam.mjs";
 
 // A queue: each task starts once the one before it has settled.
 export function new_queue() {

@@ -19,11 +19,11 @@ import gloss/store.{type Store}
 pub fn new(db: pool.Db) -> Store(Message) {
   store.inline(fn(message) {
     case message {
-      Open(thread:, reply:) -> open(db, thread) |> store.reply(reply)
-      AddPost(post:, reply:) -> add_post(db, post) |> store.reply(reply)
-      Get(id:, reply:) -> get(db, id) |> store.reply(reply)
+      Open(thread:, reply:) -> open(db, thread) |> pool.reply(reply)
+      AddPost(post:, reply:) -> add_post(db, post) |> pool.reply(reply)
+      Get(id:, reply:) -> get(db, id) |> pool.reply(reply)
       Recent(offset:, limit:, reply:) ->
-        recent(db, offset, limit) |> store.reply(reply)
+        recent(db, offset, limit) |> pool.reply(reply)
     }
   })
 }

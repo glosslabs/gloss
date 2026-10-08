@@ -1,6 +1,6 @@
 //// PGlite, Postgres compiled to WebAssembly, for `gloss/sql`: a real
 //// Postgres in the browser, or in Node, Deno and Bun, opened as an
-//// `sql_async.Database`. Statements are Postgres SQL with `$1` placeholders,
+//// `async.Database`. Statements are Postgres SQL with `$1` placeholders,
 //// and values are read exactly as `gloss/pg` reads them on the server, so
 //// statements and decoders can be shared between the two.
 ////
@@ -9,7 +9,7 @@
 //// sql.query("select id, title from notes where id = $1")
 //// |> sql.bind(sql.Int(id))
 //// |> sql.returning(note_decoder())
-//// |> sql_async.one(db, _)
+//// |> async.one(db, _)
 //// ```
 ////
 //// Install the JavaScript package alongside your app:
@@ -34,8 +34,8 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gloss/sql.{type Value}
+import gloss/sql/async.{type Database}
 import gloss/sql/internal/postgres
-import gloss/sql_async.{type Database}
 
 /// Where the database lives.
 pub opaque type Config {
@@ -69,7 +69,7 @@ type Handle
 pub fn open(config: Config) -> Promise(Result(Database, sql.Error)) {
   use opened <- promise.map(ffi_open(config.data_dir))
   use handle <- result.map(opened |> result.map_error(sql.ConnectionFailed))
-  sql_async.database(
+  async.database(
     name: "pglite",
     dialect: sql.Postgres,
     run: fn(text, args) { run(handle, text, args) },
