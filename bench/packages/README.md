@@ -21,7 +21,7 @@ GLOSS_BENCH_S3_ENDPOINT=http://127.0.0.1:9010   # access key gloss, secret gloss
 
 The JavaScript side (gloss/sql and gloss/url on Node, SQLite WebAssembly and
 PGlite) is in [`../packages_js`](../packages_js): `npm install`, then
-`gleam run`. HTTP throughput is measured by [`../run.sh`](../run.sh).
+`gleam run`. HTTP throughput is measured by [`../http/run.sh`](../http/run.sh).
 
 ## Results of the first pass (2026-10-08, Apple M5 Pro)
 
