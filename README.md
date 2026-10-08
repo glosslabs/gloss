@@ -15,20 +15,38 @@ Gloss is a progressive framework for building modern web applications with [Glea
 
 | Package | |
 |---|---|
-| [`gloss`](packages/gloss) | HTTP server and router, database pool (`gloss/sql/pool`), tracer, logger, scheduler and signals |
-| [`gloss_sql`](packages/gloss_sql) | SQL statements, values, errors and row decoding for every driver, on the BEAM and in JavaScript (`gloss/sql`) |
-| [`gloss_pg`](packages/gloss_pg) | Postgres driver for `gloss/sql/pool` (`gloss/pg`) |
-| [`gloss_mysql`](packages/gloss_mysql) | MySQL driver for `gloss/sql/pool`, speaking the protocol directly: caching_sha2 and native auth, TLS, prepared statements (`gloss/mysql`) |
-| [`gloss_sql_async`](packages/gloss_sql_async) | Running `gloss/sql` statements in JavaScript, returning Promises (`gloss/sql_async`) |
-| [`gloss_sqlite`](packages/gloss_sqlite) | SQLite driver for `gloss/sql/pool`, on the esqlite NIF (`gloss/sqlite`) |
-| [`gloss_sqlite_wasm`](packages/gloss_sqlite_wasm) | SQLite in the browser on the official WebAssembly build, with OPFS storage (`gloss/sqlite_wasm`) |
-| [`gloss_pglite`](packages/gloss_pglite) | PGlite (Postgres in WebAssembly) in the browser and JavaScript runtimes, reading values exactly as `gloss_pg` does (`gloss/pglite`) |
-| [`gloss_redis`](packages/gloss_redis) | Redis client speaking RESP directly: pooled and pipelined, transactions, pub/sub (`gloss/redis`) |
-| [`gloss_s3`](packages/gloss_s3) | S3 client with in-house SigV4 signing: objects, listing, presigned URLs, multipart; works with AWS, R2 and other S3-compatible stores (`gloss/s3`) |
+| [`gloss`](packages/gloss) | HTTP server and router, sessions, WebSockets, tracer, logger, scheduler, signals and stores |
 | [`gloss_url`](packages/gloss_url) | Building and reading URLs and query strings, strictly encoded, on the BEAM and in JavaScript (`gloss/url`) |
 | [`gloss_testing`](packages/gloss_testing) | Test helpers: requests, responses, a cookie-keeping browser, HTML readers, a WebSocket client, a test clock and ids (`gloss/testing/*`) |
-| [`gloss_sentry`](packages/gloss_sentry) | Report failures, logs and process crashes to Sentry (`gloss/sentry`) |
-| [`gloss_otel`](packages/gloss_otel) | Export spans and logs to OpenTelemetry over OTLP/HTTP (`gloss/otel`) |
+
+**SQL** ([`packages/sql`](packages/sql))
+
+| Package | |
+|---|---|
+| [`gloss_sql`](packages/sql/gloss_sql) | Statements, values, errors and row decoding for every driver, and a typed query builder, on the BEAM and in JavaScript (`gloss/sql`, `gloss/sql/query`) |
+| [`gloss_sql_pool`](packages/sql/gloss_sql_pool) | Running statements on the BEAM through a connection pool, with transactions (`gloss/sql/pool`) |
+| [`gloss_sql_async`](packages/sql/gloss_sql_async) | Running statements in JavaScript, returning Promises (`gloss/sql/async`) |
+| [`gloss_pg`](packages/sql/gloss_pg) | Postgres driver for the pool (`gloss/pg`) |
+| [`gloss_mysql`](packages/sql/gloss_mysql) | MySQL driver for the pool, speaking the protocol directly: caching_sha2 and native auth, TLS, prepared statements (`gloss/mysql`) |
+| [`gloss_sqlite`](packages/sql/gloss_sqlite) | SQLite driver for the pool, on the esqlite NIF (`gloss/sqlite`) |
+| [`gloss_sqlite_wasm`](packages/sql/gloss_sqlite_wasm) | SQLite in the browser on the official WebAssembly build, with OPFS storage (`gloss/sqlite/wasm`) |
+| [`gloss_pglite`](packages/sql/gloss_pglite) | PGlite (Postgres in WebAssembly) in the browser and JavaScript runtimes, reading values exactly as `gloss_pg` does (`gloss/pglite`) |
+
+**Clients** ([`packages/clients`](packages/clients))
+
+| Package | |
+|---|---|
+| [`gloss_redis`](packages/clients/gloss_redis) | Redis client speaking RESP directly: pooled and pipelined, transactions, pub/sub (`gloss/redis`) |
+| [`gloss_s3`](packages/clients/gloss_s3) | S3 client with in-house SigV4 signing: objects, listing, presigned URLs, multipart; works with AWS, R2 and other S3-compatible stores (`gloss/s3`) |
+
+**Observability** ([`packages/observability`](packages/observability))
+
+| Package | |
+|---|---|
+| [`gloss_sentry`](packages/observability/gloss_sentry) | Report failures, logs and process crashes to Sentry (`gloss/sentry`) |
+| [`gloss_otel`](packages/observability/gloss_otel) | Export spans and logs to OpenTelemetry over OTLP/HTTP (`gloss/otel`) |
+
+A package imports as its name with underscores as slashes: `gloss_sql_pool` is `gloss/sql/pool`.
 
 [`template`](template) is the starting point for a new application, and [`examples`](examples) shows the packages in use.
 

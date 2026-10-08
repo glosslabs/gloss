@@ -23,29 +23,29 @@ jobs:
         # `redis` and `s3` start those services for integration tests.
         include:
           - project: packages/gloss
-          - project: packages/gloss_sql
+          - project: packages/sql/gloss_sql
             js: true
-          - project: packages/gloss_sql_pool
+          - project: packages/sql/gloss_sql_pool
           - project: packages/gloss_url
             js: true
-          - project: packages/gloss_sql_async
+          - project: packages/sql/gloss_sql_async
             node: true
-          - project: packages/gloss_pg
-          - project: packages/gloss_mysql
+          - project: packages/sql/gloss_pg
+          - project: packages/sql/gloss_mysql
             mysql: true
-          - project: packages/gloss_sqlite
-          - project: packages/gloss_sqlite_wasm
+          - project: packages/sql/gloss_sqlite
+          - project: packages/sql/gloss_sqlite_wasm
             node: true
             npm: true
-          - project: packages/gloss_pglite
+          - project: packages/sql/gloss_pglite
             node: true
             npm: true
-          - project: packages/gloss_redis
+          - project: packages/clients/gloss_redis
             redis: true
-          - project: packages/gloss_s3
+          - project: packages/clients/gloss_s3
             s3: true
-          - project: packages/gloss_sentry
-          - project: packages/gloss_otel
+          - project: packages/observability/gloss_sentry
+          - project: packages/observability/gloss_otel
           - project: packages/gloss_testing
           - project: template
           - project: examples/json_api

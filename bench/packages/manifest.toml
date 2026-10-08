@@ -19,15 +19,15 @@ packages = [
   { name = "gleam_stdlib", version = "1.0.5", build_tools = ["gleam"], requirements = [], otp_app = "gleam_stdlib", source = "hex", outer_checksum = "CEE5B6C076A85B45F60C585F4316C63EC8B7127C119D5738C3958A9C4D50404E" },
   { name = "gleam_time", version = "1.11.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleam_time", source = "hex", outer_checksum = "3AB789C3ED4EB9DDA7283F46C3CF83A5487C9CFB790DC3FF8F8ACB5BF7B7A6C1" },
   { name = "gloss", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_erlang", "gleam_http", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time"], source = "local", path = "../../packages/gloss" },
-  { name = "gloss_mysql", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_erlang", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss", "gloss_sql", "gloss_sql_pool", "gloss_url"], source = "local", path = "../../packages/gloss_mysql" },
-  { name = "gloss_otel", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_http", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss", "gloss_url"], source = "local", path = "../../packages/gloss_otel" },
-  { name = "gloss_pg", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_erlang", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss", "gloss_sql", "gloss_sql_pool", "gloss_url"], source = "local", path = "../../packages/gloss_pg" },
-  { name = "gloss_redis", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss", "gloss_url"], source = "local", path = "../../packages/gloss_redis" },
-  { name = "gloss_s3", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_http", "gleam_stdlib", "gleam_time", "gloss", "gloss_url"], source = "local", path = "../../packages/gloss_s3" },
-  { name = "gloss_sentry", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_erlang", "gleam_http", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss"], source = "local", path = "../../packages/gloss_sentry" },
-  { name = "gloss_sql", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib", "gleam_time"], source = "local", path = "../../packages/gloss_sql" },
-  { name = "gloss_sql_pool", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss", "gloss_sql"], source = "local", path = "../../packages/gloss_sql_pool" },
-  { name = "gloss_sqlite", version = "0.1.0", build_tools = ["gleam"], requirements = ["esqlite", "gleam_erlang", "gleam_stdlib", "gloss", "gloss_sql", "gloss_sql_pool"], source = "local", path = "../../packages/gloss_sqlite" },
+  { name = "gloss_mysql", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_erlang", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss", "gloss_sql", "gloss_sql_pool", "gloss_url"], source = "local", path = "../../packages/sql/gloss_mysql" },
+  { name = "gloss_otel", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_http", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss", "gloss_url"], source = "local", path = "../../packages/observability/gloss_otel" },
+  { name = "gloss_pg", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_erlang", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss", "gloss_sql", "gloss_sql_pool", "gloss_url"], source = "local", path = "../../packages/sql/gloss_pg" },
+  { name = "gloss_redis", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss", "gloss_url"], source = "local", path = "../../packages/clients/gloss_redis" },
+  { name = "gloss_s3", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_http", "gleam_stdlib", "gleam_time", "gloss", "gloss_url"], source = "local", path = "../../packages/clients/gloss_s3" },
+  { name = "gloss_sentry", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_erlang", "gleam_http", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss"], source = "local", path = "../../packages/observability/gloss_sentry" },
+  { name = "gloss_sql", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib", "gleam_time"], source = "local", path = "../../packages/sql/gloss_sql" },
+  { name = "gloss_sql_pool", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss", "gloss_sql"], source = "local", path = "../../packages/sql/gloss_sql_pool" },
+  { name = "gloss_sqlite", version = "0.1.0", build_tools = ["gleam"], requirements = ["esqlite", "gleam_erlang", "gleam_stdlib", "gloss", "gloss_sql", "gloss_sql_pool"], source = "local", path = "../../packages/sql/gloss_sqlite" },
   { name = "gloss_url", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], source = "local", path = "../../packages/gloss_url" },
 ]
 
@@ -42,13 +42,13 @@ gleam_otp = { version = ">= 1.3.0 and < 2.0.0" }
 gleam_stdlib = { version = ">= 1.0.5 and < 2.0.0" }
 gleam_time = { version = ">= 1.11.0 and < 2.0.0" }
 gloss = { path = "../../packages/gloss" }
-gloss_mysql = { path = "../../packages/gloss_mysql" }
-gloss_otel = { path = "../../packages/gloss_otel" }
-gloss_pg = { path = "../../packages/gloss_pg" }
-gloss_redis = { path = "../../packages/gloss_redis" }
-gloss_s3 = { path = "../../packages/gloss_s3" }
-gloss_sentry = { path = "../../packages/gloss_sentry" }
-gloss_sql = { path = "../../packages/gloss_sql" }
-gloss_sql_pool = { path = "../../packages/gloss_sql_pool" }
-gloss_sqlite = { path = "../../packages/gloss_sqlite" }
+gloss_mysql = { path = "../../packages/sql/gloss_mysql" }
+gloss_otel = { path = "../../packages/observability/gloss_otel" }
+gloss_pg = { path = "../../packages/sql/gloss_pg" }
+gloss_redis = { path = "../../packages/clients/gloss_redis" }
+gloss_s3 = { path = "../../packages/clients/gloss_s3" }
+gloss_sentry = { path = "../../packages/observability/gloss_sentry" }
+gloss_sql = { path = "../../packages/sql/gloss_sql" }
+gloss_sql_pool = { path = "../../packages/sql/gloss_sql_pool" }
+gloss_sqlite = { path = "../../packages/sql/gloss_sqlite" }
 gloss_url = { path = "../../packages/gloss_url" }

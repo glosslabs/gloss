@@ -1,0 +1,29 @@
+name = "gloss_pg"
+version = "0.1.0"
+description = "A Postgres driver for gloss/sql, speaking the wire protocol directly"
+licenses = ["MIT"]
+internal_modules = ["gloss/pg/internal/*"]
+
+[repository]
+type = "github"
+user = "glosslabs"
+repo = "gloss"
+path = "packages/sql/gloss_pg"
+
+[erlang]
+extra_applications = ["crypto"]
+
+[dependencies]
+gloss_url = { path = "../../gloss_url" }
+gloss_sql = { path = "../gloss_sql" }
+gloss_sql_pool = { path = "../gloss_sql_pool" }
+gloss = { path = "../../gloss" }
+gleam_stdlib = ">= 1.0.5 and < 2.0.0"
+gleam_erlang = ">= 1.3.0 and < 2.0.0"
+gleam_otp = ">= 1.3.0 and < 2.0.0"
+gleam_time = ">= 1.11.0 and < 2.0.0"
+gleam_crypto = ">= 1.6.0 and < 2.0.0"
+
+[dev_dependencies]
+envoy = ">= 1.2.0 and < 2.0.0"
+gleeunit = ">= 1.11.0 and < 2.0.0"

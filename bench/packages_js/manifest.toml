@@ -10,10 +10,10 @@ packages = [
   { name = "gleam_javascript", version = "1.0.1", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleam_javascript", source = "hex", outer_checksum = "D542C4B4F40E942F5D3372D524419FA521A7BB92D621AF696CC286E89D882D55" },
   { name = "gleam_stdlib", version = "1.0.5", build_tools = ["gleam"], requirements = [], otp_app = "gleam_stdlib", source = "hex", outer_checksum = "CEE5B6C076A85B45F60C585F4316C63EC8B7127C119D5738C3958A9C4D50404E" },
   { name = "gleam_time", version = "1.11.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleam_time", source = "hex", outer_checksum = "3AB789C3ED4EB9DDA7283F46C3CF83A5487C9CFB790DC3FF8F8ACB5BF7B7A6C1" },
-  { name = "gloss_pglite", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_javascript", "gleam_stdlib", "gloss_sql", "gloss_sql_async"], source = "local", path = "../../packages/gloss_pglite" },
-  { name = "gloss_sql", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib", "gleam_time"], source = "local", path = "../../packages/gloss_sql" },
-  { name = "gloss_sql_async", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_javascript", "gleam_stdlib", "gloss_sql"], source = "local", path = "../../packages/gloss_sql_async" },
-  { name = "gloss_sqlite_wasm", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_javascript", "gleam_stdlib", "gloss_sql", "gloss_sql_async"], source = "local", path = "../../packages/gloss_sqlite_wasm" },
+  { name = "gloss_pglite", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_javascript", "gleam_stdlib", "gloss_sql", "gloss_sql_async"], source = "local", path = "../../packages/sql/gloss_pglite" },
+  { name = "gloss_sql", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib", "gleam_time"], source = "local", path = "../../packages/sql/gloss_sql" },
+  { name = "gloss_sql_async", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_javascript", "gleam_stdlib", "gloss_sql"], source = "local", path = "../../packages/sql/gloss_sql_async" },
+  { name = "gloss_sqlite_wasm", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_javascript", "gleam_stdlib", "gloss_sql", "gloss_sql_async"], source = "local", path = "../../packages/sql/gloss_sqlite_wasm" },
   { name = "gloss_url", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], source = "local", path = "../../packages/gloss_url" },
 ]
 
@@ -21,8 +21,8 @@ packages = [
 gleam_javascript = { version = ">= 1.0.0 and < 2.0.0" }
 gleam_stdlib = { version = ">= 1.0.5 and < 2.0.0" }
 gleam_time = { version = ">= 1.11.0 and < 2.0.0" }
-gloss_pglite = { path = "../../packages/gloss_pglite" }
-gloss_sql = { path = "../../packages/gloss_sql" }
-gloss_sql_async = { path = "../../packages/gloss_sql_async" }
-gloss_sqlite_wasm = { path = "../../packages/gloss_sqlite_wasm" }
+gloss_pglite = { path = "../../packages/sql/gloss_pglite" }
+gloss_sql = { path = "../../packages/sql/gloss_sql" }
+gloss_sql_async = { path = "../../packages/sql/gloss_sql_async" }
+gloss_sqlite_wasm = { path = "../../packages/sql/gloss_sqlite_wasm" }
 gloss_url = { path = "../../packages/gloss_url" }
