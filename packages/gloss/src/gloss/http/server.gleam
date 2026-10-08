@@ -588,16 +588,33 @@ fn report_problem(tracer: Tracer, problem: connection.Problem) -> Nil {
 /// res.status |> should.equal(200)
 /// ```
 ///
-/// File and streamed bodies are collected into memory. Panics when the router has duplicate
-/// routes.
+/// It compiles the routes each time; for many requests, make the function
+/// once with `handler`. File and streamed bodies are collected into memory.
+/// Panics when the router has duplicate routes.
 pub fn handle(
   builder: Builder(state),
   request: Request,
 ) -> Response(BytesTree) {
+  handler(builder)(request)
+}
+
+/// A function that runs requests through routing, middleware and the
+/// handler, as `handle` does, with the routes compiled once:
+///
+/// ```gleam
+/// let app = server.handler(web.builder(ctx))
+/// let res = app(request)
+/// ```
+///
+/// Panics when the router has duplicate routes.
+pub fn handler(builder: Builder(state)) -> fn(Request) -> Response(BytesTree) {
   case router.table(builder.router) {
     Ok(table) -> {
-      let response = pipeline(builder, table, new_flag())(request, "127.0.0.1")
-      response.set_body(response, materialise(response.body))
+      let run = pipeline(builder, table, new_flag())
+      fn(request) {
+        let response = run(request, "127.0.0.1")
+        response.set_body(response, materialise(response.body))
+      }
     }
     Error(errors) -> panic as { "invalid routes: " <> string.inspect(errors) }
   }

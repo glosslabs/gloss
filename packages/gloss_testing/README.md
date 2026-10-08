@@ -7,7 +7,7 @@ import gloss/testing/browser
 import gloss/testing/response
 
 pub fn sign_in_test() {
-  let ada = browser.new(server.handle(app.builder(), _))
+  let ada = browser.new(server.handler(app.builder()))
   let res = browser.submit(ada, "/login", [#("email", "ada@x"), #("password", "pw")])
   assert response.location(res) == Ok("/")
 }

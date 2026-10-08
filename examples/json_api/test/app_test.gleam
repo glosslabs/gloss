@@ -42,7 +42,7 @@ fn session() -> fn(Request) -> response.Response {
       log: logger.discard(),
       tracer: tracer.new(),
     )
-  server.handle(builder, _)
+  server.handler(builder)
 }
 
 fn authed(r: Request) -> Request {

@@ -2,7 +2,7 @@
 //// sends them back, so a test reads as a sequence of page visits.
 ////
 //// ```gleam
-//// let b = browser.new(server.handle(builder, _))
+//// let b = browser.new(server.handler(builder))
 //// let res = browser.submit(b, "/login", [#("email", "ada@x"), #("password", "pw")])
 //// assert response.location(res) == Ok("/")
 //// assert string.contains(response.text(browser.get(b, "/")), "Sign out")
@@ -40,7 +40,7 @@ type Message {
 }
 
 /// A browser with no cookies, sending requests to `handle`, typically
-/// `server.handle(builder, _)`.
+/// `server.handler(builder)`.
 pub fn new(handle: fn(Request) -> Response) -> Browser {
   let assert Ok(started) =
     actor.new(dict.new())

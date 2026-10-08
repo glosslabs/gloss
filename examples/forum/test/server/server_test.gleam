@@ -28,7 +28,7 @@ import support/memory_users
 /// send requests to.
 fn app() -> fn(Request) -> response.Response {
   let builder = app_builder()
-  gloss_server.handle(builder, _)
+  gloss_server.handler(builder)
 }
 
 fn app_builder() -> gloss_server.Builder(state.State) {
@@ -201,7 +201,7 @@ pub fn readers_see_replies_arrive_live_test() {
   // `handle` on the same application reach it.
   let builder = app_builder()
   let assert Ok(srv) = gloss_server.start(builder)
-  let app = gloss_server.handle(builder, _)
+  let app = gloss_server.handler(builder)
 
   let ada = browser.new(app)
   register(ada, "ada@example.com")
