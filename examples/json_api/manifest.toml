@@ -20,7 +20,7 @@ packages = [
   { name = "gloss", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_erlang", "gleam_http", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss_sql"], source = "local", path = "../../packages/gloss" },
   { name = "gloss_sentry", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_erlang", "gleam_http", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss"], source = "local", path = "../../packages/gloss_sentry" },
   { name = "gloss_sql", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib", "gleam_time"], source = "local", path = "../../packages/gloss_sql" },
-  { name = "gloss_test", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_http", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss"], source = "local", path = "../../packages/gloss_test" },
+  { name = "gloss_testing", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_http", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss"], source = "local", path = "../../packages/gloss_testing" },
 ]
 
 [requirements]
@@ -34,4 +34,4 @@ gleam_stdlib = { version = ">= 1.0.5 and < 2.0.0" }
 gleeunit = { version = ">= 1.11.0 and < 2.0.0" }
 gloss = { path = "../../packages/gloss" }
 gloss_sentry = { path = "../../packages/gloss_sentry" }
-gloss_test = { path = "../../packages/gloss_test" }
+gloss_testing = { path = "../../packages/gloss_testing" }

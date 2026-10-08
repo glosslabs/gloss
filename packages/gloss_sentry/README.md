@@ -1,17 +1,19 @@
 # gloss_sentry
 
 Reports gloss tracer failures, log entries and process crashes to
-[Sentry](https://sentry.io). It takes the function that sends HTTP requests,
-such as `httpc.send`.
+[Sentry](https://sentry.io). Imported as `gloss/sentry`; it takes the
+function that sends HTTP requests, such as `httpc.send`.
 
 ```gleam
-let assert Ok(sentry) =
-  gloss_sentry.config(dsn)
-  |> gloss_sentry.environment("production")
-  |> gloss_sentry.start(httpc.send)
+import gloss/sentry
 
-let tracer = tracer.new() |> tracer.handle(gloss_sentry.handler(sentry))
-let assert Ok(Nil) = gloss_sentry.report_crashes(sentry)
+let assert Ok(reporter) =
+  sentry.config(dsn)
+  |> sentry.environment("production")
+  |> sentry.start(httpc.send)
+
+let tracer = tracer.new() |> tracer.handle(sentry.handler(reporter))
+let assert Ok(Nil) = sentry.report_crashes(reporter)
 ```
 
 - Failed spans and error points become events; other tracer events become breadcrumbs.

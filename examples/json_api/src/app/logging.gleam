@@ -5,7 +5,7 @@ import app/config.{type Config}
 import gleam/option.{type Option, None, Some}
 import gloss/logger.{type Logger}
 import gloss/logger/file
-import gloss_sentry.{type Sentry}
+import gloss/sentry.{type Sentry}
 
 /// Debug and info to stdout; warnings and errors to stderr.
 pub fn console() -> Logger {
@@ -24,7 +24,7 @@ pub fn files(config: Config) -> Logger {
 /// Info and above to Sentry Logs, when Sentry is configured.
 pub fn to_sentry(sentry: Option(Sentry)) -> Logger {
   case sentry {
-    Some(sentry) -> gloss_sentry.logger(sentry) |> logger.min_level(logger.Info)
+    Some(sentry) -> sentry.logger(sentry) |> logger.min_level(logger.Info)
     None -> logger.discard()
   }
 }

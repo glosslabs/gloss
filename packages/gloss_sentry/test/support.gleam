@@ -7,8 +7,8 @@ import gleam/option.{None}
 import gleam/string
 import gleam/time/calendar.{Date, TimeOfDay}
 import gleam/time/timestamp.{type Timestamp}
-import gloss_sentry/internal/dsn.{type Dsn, type DsnError}
-import gloss_sentry/internal/envelope.{type Event}
+import gloss/sentry/internal/dsn.{type Dsn, type DsnError}
+import gloss/sentry/internal/envelope.{type Event}
 
 /// A UTC timestamp from civil fields.
 pub fn utc(y: Int, mo: Int, d: Int, h: Int, mi: Int) -> Timestamp {

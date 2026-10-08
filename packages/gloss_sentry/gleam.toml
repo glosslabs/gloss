@@ -2,7 +2,7 @@ name = "gloss_sentry"
 version = "0.1.0"
 description = "Report gloss tracer failures and explicit captures to Sentry"
 licenses = ["MIT"]
-internal_modules = ["gloss_sentry/internal/*"]
+internal_modules = ["gloss/sentry/internal/*"]
 
 [repository]
 type = "github"

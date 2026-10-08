@@ -1,5 +1,5 @@
 //// How SQLite drivers convert values and errors, shared by `gloss/sqlite`
-//// on the BEAM and `gloss/sqlite/wasm` in JavaScript so both behave alike.
+//// on the BEAM and `gloss/sqlite_wasm` in JavaScript so both behave alike.
 ////
 //// SQLite stores integers, reals, text and blobs. Other values are kept as
 //// text (timestamps as RFC 3339 in UTC, dates as `YYYY-MM-DD`, times as

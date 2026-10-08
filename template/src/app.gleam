@@ -7,8 +7,8 @@ import gleam/result
 import gloss/logger
 import gloss/meta
 import gloss/scheduler
+import gloss/sentry
 import gloss/tracer
-import gloss_sentry
 
 pub fn main() {
   // Add channels with logger.stack, e.g. [logger.stderr(), logger.otp()].
@@ -39,12 +39,12 @@ fn with_sentry(tracer: tracer.Tracer) -> tracer.Tracer {
   case envoy.get("SENTRY_DSN") {
     Ok(dsn) -> {
       let assert Ok(sentry) =
-        gloss_sentry.config(dsn)
-        |> gloss_sentry.environment(
+        sentry.config(dsn)
+        |> sentry.environment(
           envoy.get("APP_ENV") |> result.unwrap("production"),
         )
-        |> gloss_sentry.start(httpc.send)
-      tracer |> tracer.handle(gloss_sentry.handler(sentry))
+        |> sentry.start(httpc.send)
+      tracer |> tracer.handle(sentry.handler(sentry))
     }
     Error(Nil) -> tracer
   }

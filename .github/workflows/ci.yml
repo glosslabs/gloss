@@ -45,7 +45,7 @@ jobs:
             s3: true
           - project: packages/gloss_sentry
           - project: packages/gloss_otel
-          - project: packages/gloss_test
+          - project: packages/gloss_testing
           - project: template
           - project: examples/json_api
           - project: examples/forum

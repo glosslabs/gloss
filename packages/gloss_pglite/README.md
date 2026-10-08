@@ -2,7 +2,7 @@
 
 [PGlite](https://pglite.dev), Postgres compiled to WebAssembly, in the
 browser and other JavaScript runtimes. Imported as `gloss/pglite`; it opens a
-[`gloss/sql/async`](../gloss_sql_async) database.
+[`gloss/sql_async`](../gloss_sql_async) database.
 
 ```sh
 npm install @electric-sql/pglite
@@ -10,7 +10,7 @@ npm install @electric-sql/pglite
 
 ```gleam
 use db <- promise.try_await(pglite.open(pglite.indexed_db("app")))
-async.one(db, find_note(id))
+sql_async.one(db, find_note(id))
 ```
 
 - Storage: `memory()`, `indexed_db(name)`, `opfs(name)` (Web Worker only), or `directory(path)` in Node, Deno and Bun.

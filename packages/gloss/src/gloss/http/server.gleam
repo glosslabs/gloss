@@ -30,7 +30,7 @@
 ////    or the status is 5xx.
 ////
 //// Attach `logger.trace_handler` to the tracer for an access log, and
-//// `gloss_sentry.handler` to report failed requests to Sentry.
+//// `sentry.handler` to report failed requests to Sentry.
 ////
 //// Requests rejected before routing (malformed, too large, too slow) are
 //// answered directly and reported as `Warning` points named
