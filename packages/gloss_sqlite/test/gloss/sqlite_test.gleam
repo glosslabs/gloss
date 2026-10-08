@@ -178,7 +178,13 @@ pub fn transactions_and_savepoints_test() {
 }
 
 pub fn file_databases_persist_test() {
-  let path = "build/test-sqlite-" <> int.to_string(unique()) <> ".db"
+  // Unique across runs too, so no file from an earlier run is there.
+  let path =
+    "build/test-sqlite-"
+    <> int.to_string(system_time())
+    <> "-"
+    <> int.to_string(unique())
+    <> ".db"
   let db = start(sqlite.file(path))
   let assert Ok(_) = insert(db, "ada@x")
   assert sql.query("pragma journal_mode")
@@ -211,6 +217,9 @@ pub fn slow_statements_time_out_test() {
     |> result.is_ok
   pool.shutdown(db)
 }
+
+@external(erlang, "os", "system_time")
+fn system_time() -> Int
 
 @external(erlang, "erlang", "unique_integer")
 fn unique_integer() -> Int
