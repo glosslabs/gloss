@@ -1,231 +1,42 @@
 # gloss
 
-The core of gloss: an HTTP server and router, a database layer, tracing,
-logging, a scheduler and signal handling, with no dependencies beyond the
-gleam-lang packages.
-
-| Module | |
-|---|---|
-| `gloss/http/*` | HTTP/1.1 server, router, request context, replies and body decoding |
-| `gloss/store` | Stores: processes that answer an application's storage messages, concurrently (a database) or one at a time (memory) |
-| `gloss/sql/pool` | Running `gloss/sql` statements on the BEAM: a connection pool from a driver, transactions, tracing (statements, values and errors are in the [`gloss_sql`](../gloss_sql) package) |
-| `gloss/tracer` | Spans and points, delivered to handlers you attach; a per-process current span (`current`, `with_current`) that requests set so their queries join their trace |
-| `gloss/logger` | Structured logging with channels (`stdout`, `stderr`, `otp`, `memory`, …), `min_level`/`max_level` to split them |
-| `gloss/logger/file` | A log channel that appends to a file and rotates it by size |
-| `gloss/meta` | Key/value metadata shared by the tracer and logger |
-| `gloss/scheduler` | Interval and cron tasks |
-| `gloss/reload` | Development reloading: rebuild on source changes, load the new code into the running node, and refresh pages (or show the compiler's errors over them) |
-| `gloss/signal` | SIGTERM/SIGHUP delivery for graceful shutdown |
-| `gloss/clock` | The current time as a value code is given (`system`, `fixed`, `new`), so tests can control it |
-| `gloss/id` | Id generators code is given: `uuid_v7(clock)`, `uuid_v4()`, or your own with `new` |
-| `gloss/password` | Password hashing (salted PBKDF2-SHA256) and constant-time verification |
-
-## HTTP
+The core of gloss: an HTTP server and router, a database pool, tracing,
+logging, a scheduler and the pieces around them, built only on the gleam-lang
+packages.
 
 ```gleam
-import gloss/signal
+import gleam/erlang/process
+import gloss/http/context
+import gloss/http/reply
 import gloss/http/router
 import gloss/http/server
 
-pub fn routes() -> Router(App) {
-  let public =
-    router.new()
-    |> router.get("/health", health.show)
-
-  let notes =
-    router.group("/notes")
-    |> router.with(auth.authenticate)
-    |> router.get("/", notes.index)
-    |> router.get("/:id", notes.show)
-
-  router.combine([public, notes])
-}
-
 pub fn main() {
-  let assert Ok(srv) =
-    server.new(routes(), state)
-    |> server.port(4000)
-    |> server.tracer(tracer)
-    |> server.logger(log)
-    |> server.start
+  let routes =
+    router.new()
+    |> router.get("/notes/:id", fn(_req, ctx) {
+      use id <- context.int_param(ctx, "id")
+      reply.json(200, note_json(find(ctx.state, id)))
+    })
 
-  signal.wait_for_terminate()
-  let _ = server.shutdown(srv)
+  let assert Ok(_) = server.new(routes, state) |> server.port(4000) |> server.start
+  process.sleep_forever()
 }
 ```
 
-Handlers live in their own modules and take the request and a `Context`:
-
-```gleam
-pub fn show(_req: Request, ctx: Context(App)) -> Response {
-  use id <- context.int_param(ctx, "id")
-  case notes.get(ctx.state.notes, id) {
-    Ok(note) -> reply.json(200, note_json(note))
-    Error(Nil) -> reply.not_found()
-  }
-}
-```
-
-### Application state
-
-`server.new(routes, state)` takes the application's own services (its
-domain modules and their stores), which handlers reach as `ctx.state`. The
-server's infrastructure stays out of it and sits beside it on the context:
-`ctx.log`, `ctx.tracer` and `ctx.sessions` (given with `server.logger`,
-`server.tracer` and `server.sessions`). One state is the simple case;
-larger apps can give separate route groups their own state.
-
-### Modules
-
-| Module | |
+| Modules | |
 |---|---|
-| `gloss/http/server` | Builder (`new`, `port`, `bind`, `bind_unix`, `tracer`, `logger`, `with`, `trust_proxies`, `request_timeout`, `max_connections`, limits), `start`, `supervised`, `shutdown`, and `handle` for tests |
-| `gloss/http/router` | `group`, `with`, `get`/`post`/…, `combine`, `check`, `describe`, `inspect`, `allowed_methods` |
-| `gloss/http/context` | `Context(state)`, `Handler`, `Middleware`, `param`/`int_param` |
-| `gloss/http/reply` | `Request`/`Response`/`Body` types, `json`, `text`, `html`, `bytes`, `stream`, `empty`, error replies (`error`, `problem`, `not_found`, …), `preferred`, and `fresh` for ETag revalidation |
-| `gloss/http/body` | Read bodies on demand: `json`, `text`, `bits`, `form` (urlencoded or multipart; up to `max_body`), or `stream`/`fold` for large uploads; gzipped bodies are inflated |
-| `gloss/http/multipart` | Stream `multipart/form-data` uploads part by part |
-| `gloss/http/upload` | Save an uploaded file to disk as it arrives, with type and size limits |
-| `gloss/http/query` | Query parameters: `get`, `get_all`, `all`, and `string`/`int`/`optional_int` that answer `400` |
-| `gloss/http/cors` | Cross-origin resource sharing middleware, with preflight handling |
-| `gloss/http/cookie` | `get`, `all`, `set`, `delete`, with secure `defaults()` |
-| `gloss/http/session` | Server-side sessions: `load`, `get`/`set`/`remove`, `save`, `regenerate`, `destroy`, over a pluggable `Store` |
-| `gloss/http/session/memory` | The default store: an ETS table swept of expired sessions every minute |
-| `gloss/http/csrf` | Cross-site request forgery protection from `Sec-Fetch-Site` and `Origin`, with no tokens |
-| `gloss/http/debug_bar` | Development panel on HTML pages: the request's timeline, queries, logs, session, and recent requests (`start`, `handler`, `logger`, `middleware`) |
-| `gloss/http/static` | Files from a directory via `sendfile`, with content types, ETag revalidation, byte ranges (including multipart) for media, pre-compressed `.br`/`.gz` copies, `cache-control`, directory indexes and a single-page-app fallback |
-| `gloss/http/sse` | Server-sent events over a streamed response |
-| `gloss/http/compress` | gzip middleware for JSON, text and streamed responses, by `accept-encoding` |
-| `gloss/http/websocket` | WebSocket upgrades: `on_init`/`on_message`/`on_close` with a `CloseReason`, queued sends with a per-socket writer and `max_queue`, `sender`/`push_text` and `join`/`broadcast_text` groups, subprotocols, `permessage-deflate`, pings and idle timeouts, `close(code, reason)`, a span per socket, and cross-site upgrades refused |
-| `gloss/http/traceparent` | W3C Trace Context: continue or start a trace per request (`ctx.trace`), and propagate it to downstream calls |
+| `gloss/http/server`, `router`, `context`, `reply` | The HTTP/1.1 server, routing, handlers and responses |
+| `gloss/http/body`, `query`, `multipart`, `upload` | Reading requests: JSON, forms, query strings, streamed uploads |
+| `gloss/http/session`, `session/memory`, `session/file`, `cookie` | Server-side sessions and cookies |
+| `gloss/http/csrf`, `cors`, `secure_headers` | Protection middleware |
+| `gloss/http/static`, `compress`, `sse`, `websocket` | Files, gzip, server-sent events, WebSockets |
+| `gloss/http/traceparent`, `debug_bar` | W3C trace context; a development panel for each page |
+| `gloss/sql/pool` | Runs [`gloss/sql`](../gloss_sql) statements on a connection pool from a driver |
+| `gloss/store` | Storage messages answered by a database or memory adapter |
+| `gloss/tracer`, `logger`, `logger/file`, `meta` | Spans and points; structured logging |
+| `gloss/scheduler` | Interval and cron tasks |
+| `gloss/clock`, `id` | Time and ids as values, so tests can control them |
+| `gloss/password`, `signal`, `reload` | Password hashing; graceful shutdown; development reloading |
 
-### Errors follow the `Accept` header
-
-`reply.error`, `reply.problem` and the shortcuts (`not_found`,
-`bad_request`, `unprocessable`, …) carry a message and optional details
-rather than a rendered body. The server renders them, and its own 404,
-405, 413 and 500 responses, in the format the request's `Accept` header
-prefers:
-
-| Media type | Body |
-|---|---|
-| `application/json` | `{"error": "not found"}`, plus `"errors": [...]` when there are details |
-| `application/problem+json` | RFC 9457 `type`, `title`, `status`, `detail` |
-| `text/html` | an error page: `reply.default_error_page`, or your own via `server.error_page` |
-| `text/plain` | the message, then one detail per line |
-
-JSON is the default when there is no `Accept` header, for `*/*`, and when
-nothing offered is acceptable. Handlers that serve several formats
-themselves can ask `reply.preferred(req, ["application/json", "text/html"])`.
-
-```gleam
-server.new(routes(), state)
-|> server.error_page(fn(page) { layout.error(page.status, page.title, page.message) })
-```
-
-### Logging, tracing and Sentry
-
-Every request produces one `tracer.Span` from source `"gloss.http"`, named
-after its route (`"GET /notes/:id"`), with method, path, route, status,
-request id and size in its meta. Its `trace` and `parent_span_id` fields
-place it in the W3C trace the request belongs to. A panic or 5xx status marks the span as
-failed. Wire the tracer once and the rest follows:
-
-```gleam
-tracer.new()
-|> tracer.handle(logger.trace_handler(log))      // access log
-|> tracer.handle(gloss_sentry.handler(sentry))   // failed requests to Sentry
-```
-
-Handlers get `ctx.log`, the server's logger with `request_id` and `route`
-added to every entry.
-
-### Graceful shutdown
-
-`server.shutdown` stops accepting connections, closes idle keep-alive
-connections, lets in-flight requests finish (answering them with
-`connection: close`), and returns once all are done, or with
-`TimedOut(n)` after `shutdown_timeout`. A server started with
-`server.supervised` drains the same way when its supervisor stops it.
-`gloss/signal.wait_for_terminate` blocks until SIGTERM, so `main` can shut
-down cleanly under Docker, systemd or Kubernetes. Ctrl-C (SIGINT) cannot be
-caught by the BEAM and stops the node immediately.
-
-### Limits
-
-HTTP/1.1 only, without TLS: run behind a reverse proxy that terminates it,
-and list it in `server.trust_proxies` so `ctx.client_ip`, `req.scheme` and
-`req.host` describe the client rather than the proxy. Request
-bodies may be sent with `Content-Length` or chunked. They are read only when
-a handler asks: in full up to `max_body` (`body.bits`/`text`/`json`), or
-streamed piece by piece for large uploads (`body.stream`). Responses can be streamed with `reply.stream` (chunked
-for HTTP/1.1), and upgraded to WebSockets with `gloss/http/websocket`.
-
-## Database
-
-Statements, values and errors come from `gloss/sql` in the
-[`gloss_sql`](../gloss_sql) package, which browser drivers share.
-`gloss/sql/pool` runs them on the BEAM: one `Db` handle, transactions and a
-connection pool. A driver does the database-specific work: `gloss/pg`, from
-the [`gloss_pg`](../gloss_pg) package, is the first.
-
-```gleam
-import gleam/dynamic/decode
-import gloss/pg
-import gloss/sql
-import gloss/sql/pool
-
-let assert Ok(config) = pg.from_url("postgres://app:secret@localhost/app")
-let assert Ok(db) =
-  pool.new(pg.driver(config))
-  |> pool.size(10)
-  |> pool.tracer(tracer)
-  |> pool.start
-
-let user = {
-  use id <- decode.field(0, decode.int)
-  use email <- decode.field(1, decode.string)
-  decode.success(User(id:, email:))
-}
-
-sql.query("select id, email from users where id = $1")
-|> sql.bind(sql.Int(id))
-|> sql.returning(user)
-|> pool.one(db, _)
-```
-
-`pool.all`, `pool.one`, `pool.optional` and `pool.exec` run a statement for
-its rows, its only row, an optional row, or the count of affected rows.
-`pool.script` runs SQL text holding several statements, such as a schema.
-Statements can also be built from parts, with placeholders numbered for
-you:
-
-```gleam
-sql.query("select id, email from users where deleted_at is null")
-|> sql.when(status, fn(s, status) {
-  s |> sql.append(" and status = ") |> sql.arg(sql.Text(status))
-})
-|> sql.append(" order by id limit ")
-|> sql.arg(sql.Int(limit))
-```
-
-`pool.transaction(db, fn(tx) { ... })` commits when the body returns `Ok`,
-rolls back on `Error` or a panic, and turns nested transactions into
-savepoints. Errors are one `sql.Error` type for every driver, with
-`UniqueViolation`, `ForeignKeyViolation`, `NotNullViolation` and
-`CheckViolation` broken out so callers can match on them.
-
-### The pool
-
-Connections open on demand, up to `size`, in helper processes so a
-slow connect never blocks other callers. A statement borrows a connection
-and runs on it in the caller's process, so rows never pass through the
-pool. A process that dies holding a connection has it closed rather than
-reused. Use `pool.supervised(builder)` in a supervision tree and
-`pool.db(builder)` for the handle; it works across pool restarts.
-
-Every statement is a `tracer.Span` from source `"gloss.sql"`, and
-transactions are spans whose statements are their children. Statements
-join the calling process's current span, so under gloss/http they are part
-of the request's trace; `pool.child_of(db, parent)` names a parent
-explicitly.
+Each module's documentation has the details.
