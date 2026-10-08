@@ -2,6 +2,7 @@
 //// set, e.g. `redis://127.0.0.1:6390/0`; the AUTH test also needs
 //// GLOSS_TEST_REDIS_AUTH_URL, e.g. `redis://:s3cret@127.0.0.1:6391/0`.
 
+import envoy
 import gleam/dict
 import gleam/erlang/process
 import gleam/int
@@ -17,7 +18,7 @@ import gloss/redis.{
 import gloss/tracer
 
 fn with_redis(test_: fn(redis.Redis, String) -> Nil) -> Nil {
-  case getenv("GLOSS_TEST_REDIS_URL") {
+  case envoy.get("GLOSS_TEST_REDIS_URL") {
     Error(Nil) -> Nil
     Ok(url) -> {
       let assert Ok(config) = redis.from_url(url)
@@ -275,7 +276,7 @@ fn wait_for_subscribers(r, channel, tries) {
 }
 
 pub fn commands_are_traced_test() {
-  case getenv("GLOSS_TEST_REDIS_URL") {
+  case envoy.get("GLOSS_TEST_REDIS_URL") {
     Error(Nil) -> Nil
     Ok(url) -> {
       let spans = process.new_subject()
@@ -326,7 +327,7 @@ pub fn reconnects_after_the_connection_drops_test() {
   use r, p <- with_redis
   let assert Ok(Nil) = redis.set(r, p <> "k", "v")
   // Another client kills every other connection, ours included.
-  let assert Ok(url) = getenv("GLOSS_TEST_REDIS_URL")
+  let assert Ok(url) = envoy.get("GLOSS_TEST_REDIS_URL")
   let assert Ok(config) = redis.from_url(url)
   let assert Ok(killer) = redis.start(config |> redis.pool_size(1))
   let assert Ok(Integer(killed)) =
@@ -349,7 +350,7 @@ fn eventually(f, tries) {
 }
 
 pub fn named_clients_test() {
-  case getenv("GLOSS_TEST_REDIS_URL") {
+  case envoy.get("GLOSS_TEST_REDIS_URL") {
     Error(Nil) -> Nil
     Ok(url) -> {
       let name = process.new_name("gloss_redis_test")
@@ -364,7 +365,7 @@ pub fn named_clients_test() {
 }
 
 pub fn auth_test() {
-  case getenv("GLOSS_TEST_REDIS_AUTH_URL") {
+  case envoy.get("GLOSS_TEST_REDIS_AUTH_URL") {
     Error(Nil) -> Nil
     Ok(url) -> {
       let assert Ok(config) = redis.from_url(url)
@@ -394,9 +395,6 @@ pub fn failed_replies_inside_arrays_test() {
   assert redis.eval(r, "return {1, redis.error_reply('BAD thing')}", [p], [])
     == Ok(Array([Integer(1), Failed(kind: "BAD", message: "thing")]))
 }
-
-@external(erlang, "redis_test_ffi", "getenv")
-fn getenv(name: String) -> Result(String, Nil)
 
 @external(erlang, "os", "system_time")
 fn system_time() -> Int

@@ -1,6 +1,7 @@
 //// Tests against a real MySQL. They run only when GLOSS_TEST_MYSQL_URL is
 //// set, e.g. `mysql://root:secret@127.0.0.1:3307/gloss`.
 
+import envoy
 import gleam/bit_array
 import gleam/dynamic/decode
 import gleam/erlang/process
@@ -16,7 +17,7 @@ import gloss/sql
 import gloss/sql/pool
 
 fn config() -> Result(mysql.Config, Nil) {
-  getenv("GLOSS_TEST_MYSQL_URL") |> result.try(mysql.from_url)
+  envoy.get("GLOSS_TEST_MYSQL_URL") |> result.try(mysql.from_url)
 }
 
 fn with_config(config: mysql.Config, size: Int, test_: fn(pool.Db) -> Nil) {
@@ -480,7 +481,7 @@ pub fn a_wrong_password_fails_to_connect_test() {
 /// Runs when the test server has TLS on (MySQL 8 does by default) and
 /// GLOSS_TEST_MYSQL_TLS is set.
 pub fn connects_over_tls_test() {
-  case getenv("GLOSS_TEST_MYSQL_TLS"), config() {
+  case envoy.get("GLOSS_TEST_MYSQL_TLS"), config() {
     Ok(_), Ok(config) -> {
       use db <- with_config(mysql.ssl(config, mysql.SslRequired), 2)
       list.each(one_to(5), fn(_) {
@@ -528,6 +529,3 @@ fn one_to(n: Int) -> List(Int) {
     _ -> list.append(one_to(n - 1), [n])
   }
 }
-
-@external(erlang, "mysql_test_ffi", "getenv")
-fn getenv(name: String) -> Result(String, Nil)

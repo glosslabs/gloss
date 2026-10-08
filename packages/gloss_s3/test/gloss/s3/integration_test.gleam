@@ -9,6 +9,7 @@
 //// `GLOSS_TEST_S3_ACCESS_KEY`, `GLOSS_TEST_S3_SECRET_KEY` and `GLOSS_TEST_S3_REGION` default to
 //// `gloss`, `glosssecret` and `us-east-1`.
 
+import envoy
 import gleam/bit_array
 import gleam/http
 import gleam/http/request
@@ -22,10 +23,10 @@ import gleam/time/duration
 import gloss/s3
 
 fn with_bucket(test_: fn(s3.Bucket) -> Nil) -> Nil {
-  case getenv("GLOSS_TEST_S3_ENDPOINT") {
+  case envoy.get("GLOSS_TEST_S3_ENDPOINT") {
     Error(Nil) -> Nil
     Ok(endpoint) -> {
-      let env = fn(name, default) { getenv(name) |> result.unwrap(default) }
+      let env = fn(name, default) { envoy.get(name) |> result.unwrap(default) }
       let bucket =
         s3.new(
           access_key_id: env("GLOSS_TEST_S3_ACCESS_KEY", "gloss"),
@@ -187,7 +188,7 @@ pub fn multipart_uploads_test() {
 }
 
 pub fn bad_credentials_are_refused_test() {
-  case getenv("GLOSS_TEST_S3_ENDPOINT") {
+  case envoy.get("GLOSS_TEST_S3_ENDPOINT") {
     Error(Nil) -> Nil
     Ok(endpoint) -> {
       let bucket =
@@ -216,9 +217,6 @@ fn pattern(size: Int) -> BitArray {
   let assert Ok(tail) = bit_array.slice(block, 0, size - blocks * 16)
   bit_array.append(whole, tail)
 }
-
-@external(erlang, "s3_test_ffi", "getenv")
-fn getenv(name: String) -> Result(String, Nil)
 
 @external(erlang, "erlang", "unique_integer")
 fn unique_integer(options: List(Positive)) -> Int

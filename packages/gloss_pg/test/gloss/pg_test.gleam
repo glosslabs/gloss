@@ -1,6 +1,7 @@
 //// Tests against a real Postgres. They run only when GLOSS_TEST_PG_URL is
 //// set, e.g. `postgres://postgres:secret@127.0.0.1:5432/postgres`.
 
+import envoy
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/list
@@ -14,7 +15,7 @@ import gloss/sql
 import gloss/sql/pool
 
 fn with_db(size: Int, test_: fn(pool.Db) -> Nil) -> Nil {
-  case getenv("GLOSS_TEST_PG_URL") {
+  case envoy.get("GLOSS_TEST_PG_URL") {
     Error(Nil) -> Nil
     Ok(url) -> {
       let assert Ok(config) = pg.from_url(url)
@@ -242,7 +243,7 @@ pub fn serves_concurrent_callers_test() {
 }
 
 pub fn a_wrong_password_fails_to_connect_test() {
-  case getenv("GLOSS_TEST_PG_URL") |> result.try(pg.from_url) {
+  case envoy.get("GLOSS_TEST_PG_URL") |> result.try(pg.from_url) {
     Error(Nil) -> Nil
     Ok(config) -> {
       let assert Ok(db) =
@@ -263,7 +264,7 @@ fn one_to(n: Int) -> List(Int) {
 
 /// Runs when the test server has TLS on, e.g. with GLOSS_TEST_PG_TLS=1.
 pub fn connects_over_tls_test() {
-  case getenv("GLOSS_TEST_PG_TLS"), getenv("GLOSS_TEST_PG_URL") {
+  case envoy.get("GLOSS_TEST_PG_TLS"), envoy.get("GLOSS_TEST_PG_URL") {
     Ok(_), Ok(url) -> {
       let assert Ok(config) = pg.from_url(url <> "?sslmode=require")
       let assert Ok(db) =
@@ -294,6 +295,3 @@ pub fn connects_over_tls_test() {
     _, _ -> Nil
   }
 }
-
-@external(erlang, "pg_test_ffi", "getenv")
-fn getenv(name: String) -> Result(String, Nil)

@@ -1,6 +1,7 @@
 //// Prepared statements, COPY and LISTEN/NOTIFY against a real Postgres.
 //// Like pg_test, these run only when GLOSS_TEST_PG_URL is set.
 
+import envoy
 import gleam/bit_array
 import gleam/dynamic/decode
 import gleam/erlang/process
@@ -13,7 +14,7 @@ import gloss/sql
 import gloss/sql/pool
 
 fn config() -> Result(pg.Config, Nil) {
-  case getenv("GLOSS_TEST_PG_URL") {
+  case envoy.get("GLOSS_TEST_PG_URL") {
     Ok(url) -> pg.from_url(url)
     Error(Nil) -> Error(Nil)
   }
@@ -241,6 +242,3 @@ pub fn a_rejected_listen_is_an_error_test() {
     }
   }
 }
-
-@external(erlang, "pg_test_ffi", "getenv")
-fn getenv(name: String) -> Result(String, Nil)

@@ -24,4 +24,5 @@ gleam_time = ">= 1.11.0 and < 2.0.0"
 gleam_crypto = ">= 1.6.0 and < 2.0.0"
 
 [dev_dependencies]
+envoy = ">= 1.2.0 and < 2.0.0"
 gleeunit = ">= 1.11.0 and < 2.0.0"
