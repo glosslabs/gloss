@@ -10,9 +10,11 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/order
+import gleam/result
 import gleam/string
 import gleam/time/calendar
 import gleam/time/timestamp.{type Timestamp}
+import gloss/url
 
 pub type Credentials {
   Credentials(
@@ -235,62 +237,16 @@ pub fn parse_query(query: Option(String)) -> List(#(String, String)) {
 
 /// URI-encode everything but the unreserved characters `A-Z a-z 0-9 - _ . ~`.
 pub fn encode(text: String) -> String {
-  encode_bytes(<<text:utf8>>, "")
+  url.encode(text)
 }
 
-/// `encode`, keeping `/`, for an object key in a path.
+/// Encode each segment of a key, keeping its `/`s.
 pub fn encode_path(text: String) -> String {
   string.split(text, "/") |> list.map(encode) |> string.join("/")
 }
 
-fn encode_bytes(bytes: BitArray, acc: String) -> String {
-  case bytes {
-    <<c, rest:bytes>> ->
-      case unreserved(c) {
-        True ->
-          case bit_array.to_string(<<c>>) {
-            Ok(char) -> encode_bytes(rest, acc <> char)
-            Error(Nil) -> encode_bytes(rest, acc)
-          }
-        False ->
-          encode_bytes(rest, acc <> "%" <> bit_array.base16_encode(<<c>>))
-      }
-    _ -> acc
-  }
-}
-
-fn unreserved(c: Int) -> Bool {
-  { c >= 0x41 && c <= 0x5a }
-  || { c >= 0x61 && c <= 0x7a }
-  || { c >= 0x30 && c <= 0x39 }
-  || c == 0x2d
-  || c == 0x5f
-  || c == 0x2e
-  || c == 0x7e
-}
-
 fn decode(text: String) -> String {
-  case decode_bytes(<<text:utf8>>, <<>>) |> bit_array.to_string {
-    Ok(decoded) -> decoded
-    Error(Nil) -> text
-  }
-}
-
-fn decode_bytes(bytes: BitArray, acc: BitArray) -> BitArray {
-  case bytes {
-    <<"%":utf8, a, b, rest:bytes>> ->
-      case bit_array.to_string(<<a, b>>) {
-        Ok(digits) ->
-          case bit_array.base16_decode(digits) {
-            Ok(byte) -> decode_bytes(rest, <<acc:bits, byte:bits>>)
-            Error(Nil) ->
-              decode_bytes(<<a, b, rest:bits>>, <<acc:bits, "%":utf8>>)
-          }
-        Error(Nil) -> decode_bytes(<<a, b, rest:bits>>, <<acc:bits, "%":utf8>>)
-      }
-    <<c, rest:bytes>> -> decode_bytes(rest, <<acc:bits, c>>)
-    _ -> acc
-  }
+  url.decode(text) |> result.unwrap(text)
 }
 
 /// `YYYYMMDD` and `YYYYMMDDTHHMMSSZ` in UTC.

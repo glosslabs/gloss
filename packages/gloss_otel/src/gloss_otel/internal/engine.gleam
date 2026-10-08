@@ -17,6 +17,7 @@ import gleam/time/timestamp.{type Timestamp}
 import gloss/logger
 import gloss/meta.{type Meta}
 import gloss/tracer
+import gloss/url
 import gloss_otel/internal/otlp
 
 pub type Message {
@@ -363,17 +364,14 @@ fn tracer_level(level: tracer.Level) -> String {
 }
 
 /// The request for a signal at `endpoint`, e.g. `http://localhost:4318`
-/// and `/v1/traces`.
+/// and `["v1", "traces"]`.
 pub fn signal_request(
   endpoint: String,
-  path: String,
+  path: List(String),
   headers: List(#(String, String)),
 ) -> Result(Request(String), Nil) {
-  let base = case string.ends_with(endpoint, "/") {
-    True -> string.drop_end(endpoint, 1)
-    False -> endpoint
-  }
-  use req <- result.map(request.to(base <> path))
+  use base <- result.try(url.parse(endpoint))
+  use req <- result.map(request.from_uri(url.to_uri(url.segments(base, path))))
   list.fold(headers, req, fn(req, header) {
     request.set_header(req, header.0, header.1)
   })

@@ -12,11 +12,11 @@ import gloss_otel/internal/engine.{Post, Schedule}
 
 fn settings(max_batch: Int, max_queue: Int) -> engine.Settings {
   let assert Ok(traces) =
-    engine.signal_request("http://collector:4318/", "/v1/traces", [
+    engine.signal_request("http://collector:4318/", ["v1", "traces"], [
       #("x-api-key", "k"),
     ])
   let assert Ok(logs) =
-    engine.signal_request("http://collector:4318", "/v1/logs", [])
+    engine.signal_request("http://collector:4318", ["v1", "logs"], [])
   engine.Settings(
     traces:,
     logs:,
@@ -71,7 +71,7 @@ pub fn requests_carry_endpoint_and_headers_test() {
   assert s.traces.path == "/v1/traces"
   assert request.get_header(s.traces, "x-api-key") == Ok("k")
   assert request.get_header(s.traces, "content-type") == Ok("application/json")
-  assert engine.signal_request("not a url", "/v1/logs", []) == Error(Nil)
+  assert engine.signal_request("not a url", ["v1", "logs"], []) == Error(Nil)
 }
 
 pub fn a_partial_batch_waits_for_the_tick_test() {

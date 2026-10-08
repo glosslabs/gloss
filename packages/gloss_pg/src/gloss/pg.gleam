@@ -84,12 +84,12 @@ import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import gleam/string
 import gleam/time/duration.{type Duration}
-import gleam/uri
 import gloss/pg/internal/connection.{type PgConnection}
 import gloss/pg/internal/listener_process
 import gloss/sql
 import gloss/sql/internal/postgres as codec
 import gloss/sql/pool
+import gloss/url
 
 /// Where and how to connect. Build one with `new` or `from_url` and the
 /// setters, then give `driver(config)` to `pool.new`.
@@ -145,46 +145,35 @@ pub fn new() -> Config {
 /// `application_name` and `connect_timeout` (seconds) are understood too,
 /// and any other query parameter is sent to the server as a run-time
 /// parameter, e.g. `?search_path=app`.
-pub fn from_url(url: String) -> Result(Config, Nil) {
-  use parsed <- result.try(uri.parse(url))
-  use Nil <- result.try(case parsed.scheme {
+pub fn from_url(text: String) -> Result(Config, Nil) {
+  use parsed <- result.try(url.parse(text))
+  use Nil <- result.try(case url.scheme(parsed) {
     Some("postgres") | Some("postgresql") -> Ok(Nil)
     _ -> Error(Nil)
   })
   let config = new()
-  let config = case parsed.host {
+  let config = case url.host(parsed) {
     Some("") | None -> config
     Some(host) -> Config(..config, host:)
   }
-  let config = case parsed.port {
+  let config = case url.port(parsed) {
     Some(port) -> Config(..config, port:)
     None -> config
   }
-  use config <- result.try(case parsed.userinfo {
-    None -> Ok(config)
-    Some(userinfo) ->
-      case string.split_once(userinfo, ":") {
-        Ok(#(user, password)) -> {
-          use user <- result.try(uri.percent_decode(user))
-          use password <- result.map(uri.percent_decode(password))
-          Config(..config, user:, password: Some(password))
-        }
-        Error(Nil) ->
-          uri.percent_decode(userinfo)
-          |> result.map(fn(user) { Config(..config, user:) })
-      }
-  })
-  use config <- result.try(case parsed.path {
-    "" | "/" -> Ok(config)
-    "/" <> database ->
-      uri.percent_decode(database)
-      |> result.map(fn(database) { Config(..config, database:) })
+  let config = case url.username(parsed) {
+    Some(user) -> Config(..config, user:)
+    None -> config
+  }
+  let config = case url.password(parsed) {
+    Some(password) -> Config(..config, password: Some(password))
+    None -> config
+  }
+  use config <- result.try(case url.path_segments(parsed) {
+    [] -> Ok(config)
+    [database] -> Ok(Config(..config, database:))
     _ -> Error(Nil)
   })
-  let query =
-    option.map(parsed.query, uri.parse_query)
-    |> option.unwrap(Ok([]))
-  use query <- result.try(query)
+  let query = url.params(parsed)
   list.try_fold(query, config, fn(config, pair) {
     case pair {
       #("sslmode", "disable") -> Ok(Config(..config, ssl: SslDisabled))

@@ -213,8 +213,8 @@ fn settings(config: Config) -> Result(engine.Settings, StartError) {
     engine.signal_request(config.endpoint, path, config.headers)
     |> result.replace_error(InvalidEndpoint(config.endpoint))
   }
-  use traces <- result.try(request("/v1/traces"))
-  use logs <- result.map(request("/v1/logs"))
+  use traces <- result.try(request(["v1", "traces"]))
+  use logs <- result.map(request(["v1", "logs"]))
   engine.Settings(
     traces:,
     logs:,

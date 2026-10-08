@@ -54,11 +54,11 @@ import gleam/result
 import gleam/string
 import gleam/time/duration.{type Duration}
 import gleam/time/timestamp
-import gleam/uri
 import gloss/meta
 import gloss/redis/internal/connection
 import gloss/redis/internal/resp
 import gloss/tracer.{type Tracer}
+import gloss/url
 
 // --- Configuration ------------------------------------------------------------
 
@@ -99,43 +99,35 @@ pub fn new() -> Config {
 
 /// A config from a URL: `redis://[[user]:password@]host[:port][/database]`,
 /// or `rediss://` for TLS.
-pub fn from_url(url: String) -> Result(Config, Nil) {
-  use parsed <- result.try(uri.parse(url))
-  use tls <- result.try(case parsed.scheme {
+pub fn from_url(text: String) -> Result(Config, Nil) {
+  use parsed <- result.try(url.parse(text))
+  use tls <- result.try(case url.scheme(parsed) {
     Some("redis") -> Ok(False)
     Some("rediss") -> Ok(True)
     _ -> Error(Nil)
   })
-  use host <- result.try(option.to_result(parsed.host, Nil))
-  let #(username, password) = case parsed.userinfo {
-    None -> #(None, None)
-    Some(info) ->
-      case string.split_once(info, ":") {
-        Ok(#("", password)) -> #(None, Some(decode(password)))
-        Ok(#(user, password)) -> #(Some(decode(user)), Some(decode(password)))
-        Error(Nil) -> #(None, Some(decode(info)))
-      }
+  use host <- result.try(option.to_result(url.host(parsed), Nil))
+  // `redis://secret@host` names a password, not a user.
+  let #(username, password) = case url.username(parsed), url.password(parsed) {
+    Some(user), None -> #(None, Some(user))
+    username, password -> #(username, password)
   }
-  use database <- result.try(case parsed.path {
-    "" | "/" -> Ok(0)
-    "/" <> n -> int.parse(n)
+  use database <- result.try(case url.path_segments(parsed) {
+    [] -> Ok(0)
+    [n] -> int.parse(n)
     _ -> Error(Nil)
   })
   Ok(
     Config(
       ..new(),
       host:,
-      port: option.unwrap(parsed.port, 6379),
+      port: option.unwrap(url.port(parsed), 6379),
       tls:,
       username:,
       password:,
       database:,
     ),
   )
-}
-
-fn decode(text: String) -> String {
-  uri.percent_decode(text) |> result.unwrap(text)
 }
 
 pub fn host(config: Config, host: String) -> Config {

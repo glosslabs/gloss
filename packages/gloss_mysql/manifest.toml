@@ -17,6 +17,7 @@ packages = [
   { name = "gleeunit", version = "1.11.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleeunit", source = "hex", outer_checksum = "EC31ABA74256AEA531EDF8169931D775BBB384FED0A8A1BDC4DD9354E3E21826" },
   { name = "gloss", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_crypto", "gleam_erlang", "gleam_http", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time", "gloss_sql"], source = "local", path = "../gloss" },
   { name = "gloss_sql", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib", "gleam_time"], source = "local", path = "../gloss_sql" },
+  { name = "gloss_url", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], source = "local", path = "../gloss_url" },
 ]
 
 [requirements]
@@ -28,3 +29,4 @@ gleam_time = { version = ">= 1.11.0 and < 2.0.0" }
 gleeunit = { version = ">= 1.11.0 and < 2.0.0" }
 gloss = { path = "../gloss" }
 gloss_sql = { path = "../gloss_sql" }
+gloss_url = { path = "../gloss_url" }
