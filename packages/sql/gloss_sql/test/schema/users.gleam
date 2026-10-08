@@ -1,6 +1,5 @@
 //// A users table for the query tests, as an app would describe it.
 
-import gleam/dynamic/decode
 import gleam/option.{type Option}
 import gloss/sql/query.{type Column, type Table}
 
@@ -11,13 +10,13 @@ pub fn table() -> Table(Users) {
 }
 
 pub fn id() -> Column(Users, Int) {
-  query.column(table(), "id", decode.int, 0)
+  query.int_column(table(), "id")
 }
 
 pub fn email() -> Column(Users, String) {
-  query.column(table(), "email", decode.string, "")
+  query.text_column(table(), "email")
 }
 
 pub fn bio() -> Column(Users, Option(String)) {
-  query.column(table(), "bio", decode.string, "") |> query.nullable
+  query.text_column(table(), "bio") |> query.nullable
 }

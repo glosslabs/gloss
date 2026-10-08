@@ -1,6 +1,5 @@
 //// A posts table for the query tests.
 
-import gleam/dynamic/decode
 import gloss/sql/query.{type Column, type Table}
 
 pub type Posts
@@ -10,13 +9,13 @@ pub fn table() -> Table(Posts) {
 }
 
 pub fn id() -> Column(Posts, Int) {
-  query.column(table(), "id", decode.int, 0)
+  query.int_column(table(), "id")
 }
 
 pub fn user_id() -> Column(Posts, Int) {
-  query.column(table(), "user_id", decode.int, 0)
+  query.int_column(table(), "user_id")
 }
 
 pub fn title() -> Column(Posts, String) {
-  query.column(table(), "title", decode.string, "")
+  query.text_column(table(), "title")
 }

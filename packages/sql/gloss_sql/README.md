@@ -26,8 +26,8 @@ pub fn recent(limit: Int) -> sql.Statement(#(Int, String)) {
 
 ```gleam
 query.from(users.table())
-|> query.where(query.eq(query.ref(users.email()), query.text(email)))
-|> query.order_by(query.ref(users.id()), query.Desc)
+|> query.where(query.eq(users.email(), email))
+|> query.order_by(users.id(), query.Desc)
 |> query.select({
   use id <- query.field(users.id())
   use email <- query.field(users.email())
@@ -36,6 +36,6 @@ query.from(users.table())
 |> query.to_statement
 ```
 
-  Selects with joins, grouping, subqueries and raw fragments; inserts, updates and deletes with `RETURNING`. Quoting and placeholders follow the driver's `Dialect` (Postgres, MySQL, SQLite).
+  Every expression carries its table, so a column of a table the query doesn't read, or a left-joined column read without `maybe`, is a compile error. Selects with joins, grouping, subqueries and raw fragments; inserts, updates and deletes with `RETURNING`. Quoting and placeholders follow the driver's `Dialect` (Postgres, MySQL, SQLite).
 - One `Error` type for every driver, with unique, foreign key, not-null and check violations broken out.
 - `timestamp_decoder`, `date_decoder` and `time_decoder` for column values.

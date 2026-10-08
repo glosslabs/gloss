@@ -13,26 +13,24 @@
 //// }
 ////
 //// pub fn id() -> query.Column(Users, Int) {
-////   query.column(table(), "id", decode.int, 0)
+////   query.int_column(table(), "id")
 //// }
 ////
 //// pub fn email() -> query.Column(Users, String) {
-////   query.column(table(), "email", decode.string, "")
+////   query.text_column(table(), "email")
 //// }
 ////
 //// pub fn bio() -> query.Column(Users, Option(String)) {
-////   query.column(table(), "bio", decode.string, "") |> query.nullable
+////   query.text_column(table(), "bio") |> query.nullable
 //// }
 //// ```
 ////
-//// Then build queries from them. Expressions carry the Gleam type of their
-//// values, so comparing `email` with an `Int` doesn't compile, and the
-//// selected columns decode into a row as `gleam/dynamic/decode` would:
+//// Then build queries from them:
 ////
 //// ```gleam
 //// query.from(users.table())
-//// |> query.where(query.eq(query.ref(users.email()), query.text(email)))
-//// |> query.order_by(query.ref(users.id()), query.Desc)
+//// |> query.where(query.eq(users.email(), email))
+//// |> query.order_by(users.id(), query.Desc)
 //// |> query.limit(20)
 //// |> query.select({
 ////   use id <- query.field(users.id())
@@ -47,11 +45,34 @@
 //// driver and can be labelled with `sql.label`. Names are quoted and
 //// placeholders written when a driver renders it, for its own database.
 ////
-//// ## Without a schema
+//// ## What the types check
 ////
-//// `table` and `named` take plain names, and their types fit anything, so
-//// a query can also be built from strings. `columns` selects expressions
-//// whose rows decode as `Dynamic`, by position.
+//// Every expression has the table it reads from and the Gleam type of its
+//// values: `users.email()` is a `Column(Users, String)`. So comparing it
+//// with an `Int` doesn't compile, and neither does filtering, sorting or
+//// selecting by a column of a table the query doesn't read. Values are
+//// compared as Gleam values, `eq(users.email(), email)`, and `eq` with
+//// `None` is `IS NULL`.
+////
+//// A join reads from `Joined(a, b)`. Lift each column into it with `left`
+//// or `right`, or, after a `left_join`, with `maybe`, which reads the
+//// joined table's columns as `Option`s since rows with no match have none:
+////
+//// ```gleam
+//// query.from(users.table())
+//// |> query.left_join(
+////   posts.table(),
+////   on: query.same(query.right(posts.user_id()), query.left(users.id())),
+//// )
+//// |> query.select({
+////   use email <- query.field(query.left(users.email()))
+////   use title <- query.field(query.maybe(posts.title()))
+////   query.done(#(email, title))
+//// })
+//// ```
+////
+//// A subquery is a query of its own, on its own tables, so it can't read
+//// the outer query's columns.
 ////
 //// ## Writes
 ////
@@ -61,17 +82,17 @@
 //// does not.
 ////
 //// ```gleam
-//// query.update(users.table(), [query.set(users.bio(), query.null())])
-//// |> query.where(query.eq(query.ref(users.id()), query.int(id)))
+//// query.update(users.table(), [query.set(users.bio(), None)])
+//// |> query.where(query.eq(users.id(), id))
 //// |> query.to_statement
 //// |> pool.exec(db, _)
 //// ```
 ////
 //// ## Selected values
 ////
-//// `field` reads a column. To read it, the selection calls the rest of
-//// itself once with the column's `zero` value, so the rest must select the
-//// same columns whatever value it is given: decide which columns to select
+//// `field` reads a value. To read it, the selection calls the rest of
+//// itself once with a placeholder value (`0`, `""`, `None`), so the rest
+//// must select the same values whatever it is given: decide what to select
 //// before the selection, not inside it.
 
 import gleam/bit_array
@@ -97,51 +118,157 @@ pub fn table(name: String) -> Table(table) {
   Table(name)
 }
 
-/// A column of `table` whose values are `t` in Gleam: read with `decoder`.
-pub opaque type Column(table, t) {
-  Column(table: String, name: String, decoder: Decoder(t), zero: t)
+/// An SQL expression on `table` whose values are `t` in Gleam. `kind` tells
+/// columns, which `set` can write, from other expressions: use the
+/// `Column` and `Expr` names for it.
+pub opaque type Term(kind, table, t) {
+  Term(
+    node: Node,
+    decoder: Decoder(t),
+    /// Any value of the type; see "Selected values" above.
+    zero: t,
+    encode: fn(t) -> Value,
+  )
 }
 
-/// The column `name` of `table`, decoded with `decoder`. `zero` is any
-/// value of its type, such as `0` or `""`; see "Selected values" above.
+pub type IsColumn
+
+pub type IsExpr
+
+/// A column of `table`.
+pub type Column(table, t) =
+  Term(IsColumn, table, t)
+
+/// A computed value on `table`, such as a condition or a count.
+pub type Expr(table, t) =
+  Term(IsExpr, table, t)
+
+/// The column `name` of `table`, of a type the other column functions don't
+/// cover: read with `decoder`, written with `encode`. `zero` is any value of
+/// the type, such as `0` or `""`; see "Selected values" above.
 pub fn column(
   table: Table(table),
   name: String,
-  decoder: Decoder(t),
-  zero: t,
+  decoder decoder: Decoder(t),
+  zero zero: t,
+  encode encode: fn(t) -> Value,
 ) -> Column(table, t) {
-  Column(table: table.name, name:, decoder:, zero:)
+  Term(node: ColumnRef(table.name, name), decoder:, zero:, encode:)
 }
 
-/// The column, allowing `NULL`, which reads as `None`.
-pub fn nullable(column: Column(table, t)) -> Column(table, Option(t)) {
-  let Column(table:, name:, decoder:, ..) = column
-  Column(table:, name:, decoder: decode.optional(decoder), zero: None)
+pub fn int_column(table: Table(table), name: String) -> Column(table, Int) {
+  column(table, name, decoder: decode.int, zero: 0, encode: sql.Int)
 }
 
-/// A column of the first table of a join, selected from the join.
-pub fn left(column: Column(a, t)) -> Column(Joined(a, b), t) {
-  let Column(table:, name:, decoder:, zero:) = column
-  Column(table:, name:, decoder:, zero:)
+pub fn float_column(table: Table(table), name: String) -> Column(table, Float) {
+  column(table, name, decoder: float_decoder(), zero: 0.0, encode: sql.Float)
 }
 
-/// A column of the joined table, selected from the join. After a
-/// `left_join`, its values may be `NULL`: make it `nullable` too.
-pub fn right(column: Column(b, t)) -> Column(Joined(a, b), t) {
-  let Column(table:, name:, decoder:, zero:) = column
-  Column(table:, name:, decoder:, zero:)
+pub fn text_column(table: Table(table), name: String) -> Column(table, String) {
+  column(table, name, decoder: decode.string, zero: "", encode: sql.Text)
+}
+
+/// A boolean column, which MySQL and SQLite store as `0` or `1`.
+pub fn bool_column(table: Table(table), name: String) -> Column(table, Bool) {
+  column(table, name, decoder: bool_decoder(), zero: False, encode: sql.Bool)
+}
+
+pub fn bytes_column(
+  table: Table(table),
+  name: String,
+) -> Column(table, BitArray) {
+  column(table, name, decoder: decode.bit_array, zero: <<>>, encode: sql.Bytes)
+}
+
+pub fn timestamp_column(
+  table: Table(table),
+  name: String,
+) -> Column(table, Timestamp) {
+  column(
+    table,
+    name,
+    decoder: sql.timestamp_decoder(),
+    zero: timestamp.unix_epoch,
+    encode: sql.Timestamp,
+  )
+}
+
+pub fn date_column(
+  table: Table(table),
+  name: String,
+) -> Column(table, calendar.Date) {
+  column(
+    table,
+    name,
+    decoder: sql.date_decoder(),
+    zero: calendar.Date(1970, calendar.January, 1),
+    encode: sql.Date,
+  )
+}
+
+pub fn time_column(
+  table: Table(table),
+  name: String,
+) -> Column(table, calendar.TimeOfDay) {
+  column(
+    table,
+    name,
+    decoder: sql.time_decoder(),
+    zero: calendar.TimeOfDay(0, 0, 0, 0),
+    encode: sql.Time,
+  )
+}
+
+/// The value, allowing `NULL`, which reads and writes as `None`.
+pub fn nullable(term: Term(kind, table, t)) -> Term(kind, table, Option(t)) {
+  let Term(node:, decoder:, encode:, ..) = term
+  Term(
+    node:,
+    decoder: decode.optional(decoder),
+    zero: None,
+    encode: sql.nullable(_, of: encode),
+  )
+}
+
+/// A value of the first table of a join, read in the join.
+pub fn left(term: Term(kind, a, t)) -> Term(kind, Joined(a, b), t) {
+  let Term(node:, decoder:, zero:, encode:) = term
+  Term(node:, decoder:, zero:, encode:)
+}
+
+/// A value of the table joined with `join`, read in the join, or of the
+/// table joined with `left_join`, read in its `on` condition.
+pub fn right(term: Term(kind, b, t)) -> Term(kind, Joined(a, b), t) {
+  let Term(node:, decoder:, zero:, encode:) = term
+  Term(node:, decoder:, zero:, encode:)
+}
+
+/// A value of the table joined with `left_join`, read in the join: `None`
+/// in rows with no match.
+pub fn maybe(
+  term: Term(kind, b, t),
+) -> Term(kind, Joined(a, Nullable(b)), Option(t)) {
+  let Term(node:, decoder:, encode:, ..) = term
+  Term(
+    node:,
+    decoder: decode.optional(decoder),
+    zero: None,
+    encode: sql.nullable(_, of: encode),
+  )
+}
+
+fn float_decoder() -> Decoder(Float) {
+  decode.one_of(decode.float, [decode.int |> decode.map(int.to_float)])
+}
+
+fn bool_decoder() -> Decoder(Bool) {
+  decode.one_of(decode.bool, [decode.int |> decode.map(fn(i) { i != 0 })])
 }
 
 // --- Expressions -------------------------------------------------------------
 
-/// An SQL expression whose values are `t` in Gleam.
-pub opaque type Expr(t) {
-  Expr(node: Node)
-}
-
 type Node {
   ColumnRef(table: String, name: String)
-  Name(String)
   Param(Value)
   /// SQL text with `?` for each argument.
   Raw(sql: String, args: List(Value))
@@ -156,62 +283,12 @@ type Node {
   Call(name: String, args: List(Node))
 }
 
-/// The column's value.
-pub fn ref(column: Column(table, t)) -> Expr(t) {
-  Expr(ColumnRef(column.table, column.name))
+fn condition(node: Node) -> Expr(table, Bool) {
+  Term(node:, decoder: bool_decoder(), zero: False, encode: sql.Bool)
 }
 
-/// The column, or other name, called `name`, of any type: `named("email")`
-/// or `named("users.email")`.
-pub fn named(name: String) -> Expr(t) {
-  Expr(Name(name))
-}
-
-pub fn int(value: Int) -> Expr(Int) {
-  Expr(Param(sql.Int(value)))
-}
-
-pub fn float(value: Float) -> Expr(Float) {
-  Expr(Param(sql.Float(value)))
-}
-
-pub fn text(value: String) -> Expr(String) {
-  Expr(Param(sql.Text(value)))
-}
-
-pub fn bool(value: Bool) -> Expr(Bool) {
-  Expr(Param(sql.Bool(value)))
-}
-
-pub fn bytes(value: BitArray) -> Expr(BitArray) {
-  Expr(Param(sql.Bytes(value)))
-}
-
-pub fn timestamp(value: Timestamp) -> Expr(Timestamp) {
-  Expr(Param(sql.Timestamp(value)))
-}
-
-pub fn date(value: calendar.Date) -> Expr(calendar.Date) {
-  Expr(Param(sql.Date(value)))
-}
-
-pub fn time(value: calendar.TimeOfDay) -> Expr(calendar.TimeOfDay) {
-  Expr(Param(sql.Time(value)))
-}
-
-/// An argument of any type, for values the functions above don't cover.
-pub fn value(value: Value) -> Expr(t) {
-  Expr(Param(value))
-}
-
-/// `NULL`.
-pub fn null() -> Expr(Option(t)) {
-  Expr(Keyword("NULL"))
-}
-
-/// A value for a nullable column: `eq(ref(users.bio()), some(text("hi")))`.
-pub fn some(expr: Expr(t)) -> Expr(Option(t)) {
-  Expr(expr.node)
+fn whole_number(node: Node) -> Expr(table, Int) {
+  Term(node:, decoder: decode.int, zero: 0, encode: sql.Int)
 }
 
 /// SQL text with a `?` for each of `args`, in order; write `??` for a `?`
@@ -219,10 +296,10 @@ pub fn some(expr: Expr(t)) -> Expr(Option(t)) {
 /// input.
 ///
 /// Panics when the number of `?` and of `args` differ.
-pub fn raw(sql: String, args: List(Value)) -> Expr(t) {
+pub fn raw(sql: String, args: List(Value)) -> Expr(table, Bool) {
   let count = count_placeholders(<<sql:utf8>>, 0)
   case count == list.length(args) {
-    True -> Expr(Raw(sql, args))
+    True -> condition(Raw(sql, args))
     False ->
       panic as {
         "query.raw: \""
@@ -245,114 +322,168 @@ fn count_placeholders(sql: BitArray, count: Int) -> Int {
   }
 }
 
-pub fn eq(left: Expr(t), right: Expr(t)) -> Expr(Bool) {
-  binary(left, "=", right)
+/// Whether `term` is `value`. With `None`, whether it is `NULL`.
+pub fn eq(term: Term(kind, table, t), value: t) -> Expr(table, Bool) {
+  case term.encode(value) {
+    sql.Null -> condition(IsNull(term.node, negated: False))
+    value -> condition(Binary(term.node, "=", Param(value)))
+  }
 }
 
-pub fn not_eq(left: Expr(t), right: Expr(t)) -> Expr(Bool) {
-  binary(left, "<>", right)
+/// Whether `term` isn't `value`. With `None`, whether it isn't `NULL`.
+pub fn not_eq(term: Term(kind, table, t), value: t) -> Expr(table, Bool) {
+  case term.encode(value) {
+    sql.Null -> condition(IsNull(term.node, negated: True))
+    value -> condition(Binary(term.node, "<>", Param(value)))
+  }
 }
 
-pub fn lt(left: Expr(t), right: Expr(t)) -> Expr(Bool) {
-  binary(left, "<", right)
+pub fn lt(term: Term(kind, table, t), value: t) -> Expr(table, Bool) {
+  compare_value(term, "<", value)
 }
 
-pub fn lte(left: Expr(t), right: Expr(t)) -> Expr(Bool) {
-  binary(left, "<=", right)
+pub fn lte(term: Term(kind, table, t), value: t) -> Expr(table, Bool) {
+  compare_value(term, "<=", value)
 }
 
-pub fn gt(left: Expr(t), right: Expr(t)) -> Expr(Bool) {
-  binary(left, ">", right)
+pub fn gt(term: Term(kind, table, t), value: t) -> Expr(table, Bool) {
+  compare_value(term, ">", value)
 }
 
-pub fn gte(left: Expr(t), right: Expr(t)) -> Expr(Bool) {
-  binary(left, ">=", right)
+pub fn gte(term: Term(kind, table, t), value: t) -> Expr(table, Bool) {
+  compare_value(term, ">=", value)
 }
 
 /// `LIKE`, with `%` and `_` as wildcards.
-pub fn like(value: Expr(String), pattern: Expr(String)) -> Expr(Bool) {
-  binary(value, "LIKE", pattern)
+pub fn like(
+  term: Term(kind, table, String),
+  pattern: String,
+) -> Expr(table, Bool) {
+  compare_value(term, "LIKE", pattern)
 }
 
-fn binary(left: Expr(a), operator: String, right: Expr(a)) -> Expr(b) {
-  Expr(Binary(left.node, operator, right.node))
+fn compare_value(
+  term: Term(kind, table, t),
+  operator: String,
+  value: t,
+) -> Expr(table, Bool) {
+  condition(Binary(term.node, operator, Param(term.encode(value))))
 }
 
-pub fn is_null(expr: Expr(Option(t))) -> Expr(Bool) {
-  Expr(IsNull(expr.node, negated: False))
+/// How `compare` compares two values.
+pub type Comparison {
+  Equal
+  NotEqual
+  Less
+  LessOrEqual
+  Greater
+  GreaterOrEqual
 }
 
-pub fn is_not_null(expr: Expr(Option(t))) -> Expr(Bool) {
-  Expr(IsNull(expr.node, negated: True))
+/// Compare two values of the query, such as the columns of a join.
+pub fn compare(
+  left: Term(a, table, t),
+  comparison: Comparison,
+  right: Term(b, table, t),
+) -> Expr(table, Bool) {
+  let operator = case comparison {
+    Equal -> "="
+    NotEqual -> "<>"
+    Less -> "<"
+    LessOrEqual -> "<="
+    Greater -> ">"
+    GreaterOrEqual -> ">="
+  }
+  condition(Binary(left.node, operator, right.node))
 }
 
-/// Whether the value is one of `values`; never, when there are none.
-pub fn in(expr: Expr(t), values: List(Expr(t))) -> Expr(Bool) {
+/// Whether two values of the query are equal: `compare(left, Equal, right)`.
+pub fn same(
+  left: Term(a, table, t),
+  right: Term(b, table, t),
+) -> Expr(table, Bool) {
+  compare(left, Equal, right)
+}
+
+/// Whether `term` is one of `values`; never, when there are none.
+pub fn in(term: Term(kind, table, t), values: List(t)) -> Expr(table, Bool) {
+  in_values(term, values, negated: False, when_empty: "FALSE")
+}
+
+/// Whether `term` is none of `values`; always, when there are none.
+pub fn not_in(
+  term: Term(kind, table, t),
+  values: List(t),
+) -> Expr(table, Bool) {
+  in_values(term, values, negated: True, when_empty: "TRUE")
+}
+
+fn in_values(
+  term: Term(kind, table, t),
+  values: List(t),
+  negated negated: Bool,
+  when_empty constant: String,
+) -> Expr(table, Bool) {
   case values {
-    [] -> Expr(Keyword("FALSE"))
-    _ -> Expr(InList(expr.node, list.map(values, node), negated: False))
+    [] -> condition(Keyword(constant))
+    _ -> {
+      let params = list.map(values, fn(value) { Param(term.encode(value)) })
+      condition(InList(term.node, params, negated:))
+    }
   }
 }
 
-/// Whether the value is none of `values`; always, when there are none.
-pub fn not_in(expr: Expr(t), values: List(Expr(t))) -> Expr(Bool) {
-  case values {
-    [] -> Expr(Keyword("TRUE"))
-    _ -> Expr(InList(expr.node, list.map(values, node), negated: True))
-  }
-}
-
-/// Whether the value is one of the rows `query` selects.
+/// Whether `term` is one of the values `query` selects.
 pub fn in_query(
-  expr: Expr(t),
-  query: Query(Filtered(Select), table, t),
-) -> Expr(Bool) {
-  Expr(InQuery(expr.node, query.body, negated: False))
+  term: Term(kind, table, t),
+  query: Query(Filtered(Select), inner, t),
+) -> Expr(table, Bool) {
+  condition(InQuery(term.node, query.body, negated: False))
 }
 
 /// Whether `query` selects any row.
-pub fn exists(query: Query(Filtered(Select), table, row)) -> Expr(Bool) {
-  Expr(Exists(query.body))
+pub fn exists(query: Query(Filtered(Select), inner, row)) -> Expr(table, Bool) {
+  condition(Exists(query.body))
 }
 
 /// All of `conditions`; true when there are none.
-pub fn and(conditions: List(Expr(Bool))) -> Expr(Bool) {
+pub fn and(conditions: List(Term(kind, table, Bool))) -> Expr(table, Bool) {
   junction("AND", conditions, "TRUE")
 }
 
 /// Any of `conditions`; false when there are none.
-pub fn or(conditions: List(Expr(Bool))) -> Expr(Bool) {
+pub fn or(conditions: List(Term(kind, table, Bool))) -> Expr(table, Bool) {
   junction("OR", conditions, "FALSE")
 }
 
 fn junction(
   operator: String,
-  conditions: List(Expr(Bool)),
+  conditions: List(Term(kind, table, Bool)),
   identity: String,
-) -> Expr(Bool) {
+) -> Expr(table, Bool) {
   case conditions {
-    [] -> Expr(Keyword(identity))
-    [condition] -> condition
-    _ -> Expr(Junction(operator, list.map(conditions, node)))
+    [] -> condition(Keyword(identity))
+    [only] -> condition(only.node)
+    _ -> condition(Junction(operator, list.map(conditions, node)))
   }
 }
 
-pub fn not(condition: Expr(Bool)) -> Expr(Bool) {
-  Expr(Not(condition.node))
+pub fn not(term: Term(kind, table, Bool)) -> Expr(table, Bool) {
+  condition(Not(term.node))
 }
 
 /// `count(*)`.
-pub fn count_all() -> Expr(Int) {
-  Expr(Call("count", [Keyword("*")]))
+pub fn count_all() -> Expr(table, Int) {
+  whole_number(Call("count", [Keyword("*")]))
 }
 
 /// How many rows have a value that isn't `NULL`.
-pub fn count(expr: Expr(t)) -> Expr(Int) {
-  Expr(Call("count", [expr.node]))
+pub fn count(term: Term(kind, table, t)) -> Expr(table, Int) {
+  whole_number(Call("count", [term.node]))
 }
 
-fn node(expr: Expr(t)) -> Node {
-  expr.node
+fn node(term: Term(kind, table, t)) -> Node {
+  term.node
 }
 
 // --- Queries -----------------------------------------------------------------
@@ -371,6 +502,10 @@ pub type Filtered(kind)
 
 /// The tables of a join.
 pub type Joined(left, right)
+
+/// A table joined with `left_join`, whose columns are `NULL` in rows with
+/// no match.
+pub type Nullable(table)
 
 /// A query of `kind` on `table`, whose rows decode as `row`.
 pub opaque type Query(kind, table, row) {
@@ -423,8 +558,9 @@ pub opaque type Assignment(table) {
   Assignment(column: String, value: Node)
 }
 
-pub fn set(column: Column(table, t), value: Expr(t)) -> Assignment(table) {
-  Assignment(column.name, value.node)
+pub fn set(column: Column(table, t), value: t) -> Assignment(table) {
+  let assert ColumnRef(name:, ..) = column.node
+  Assignment(name, Param(column.encode(value)))
 }
 
 /// Select every column of `table`. Rows decode as `Dynamic` until `select`
@@ -510,7 +646,7 @@ pub fn delete(
 /// also hold.
 pub fn where(
   query: Query(Filtered(kind), table, row),
-  condition: Expr(Bool),
+  condition: Term(c, table, Bool),
 ) -> Query(Filtered(kind), table, row) {
   let add = fn(existing) {
     case existing {
@@ -528,22 +664,24 @@ pub fn where(
   Query(..query, body:)
 }
 
-/// Join `table` on `on`, keeping only rows that match.
+/// Join `table` on `on`, keeping only rows that match. Read the query's
+/// columns with `left` and `table`'s with `right`.
 pub fn join(
   query: Query(Filtered(Select), a, row),
   table: Table(b),
-  on condition: Expr(Bool),
+  on condition: Term(c, Joined(a, b), Bool),
 ) -> Query(Filtered(Select), Joined(a, b), row) {
   add_join(query, "JOIN", table, condition)
 }
 
 /// Join `table` on `on`, keeping rows with no match, whose `table` columns
-/// are then `NULL`.
+/// are then `NULL`. In `on`, read the query's columns with `left` and
+/// `table`'s with `right`; after it, read `table`'s with `maybe`.
 pub fn left_join(
   query: Query(Filtered(Select), a, row),
   table: Table(b),
-  on condition: Expr(Bool),
-) -> Query(Filtered(Select), Joined(a, b), row) {
+  on condition: Term(c, Joined(a, b), Bool),
+) -> Query(Filtered(Select), Joined(a, Nullable(b)), row) {
   add_join(query, "LEFT JOIN", table, condition)
 }
 
@@ -551,8 +689,8 @@ fn add_join(
   query: Query(Filtered(Select), a, row),
   keyword: String,
   table: Table(b),
-  condition: Expr(Bool),
-) -> Query(Filtered(Select), Joined(a, b), row) {
+  condition: Term(c, Joined(a, b), Bool),
+) -> Query(Filtered(Select), joined, row) {
   let join = Join(keyword:, table: table.name, on: condition.node)
   let Query(body:, decoder:) =
     map_select(query, fn(clauses) {
@@ -564,30 +702,30 @@ fn add_join(
 /// Sort by `by`. Each `order_by` sorts ties of the ones before.
 pub fn order_by(
   query: Query(Filtered(Select), table, row),
-  by expr: Expr(t),
+  by term: Term(kind, table, t),
   direction direction: Direction,
 ) -> Query(Filtered(Select), table, row) {
   map_select(query, fn(body) {
     Clauses(
       ..body,
-      order_by: list.append(body.order_by, [#(expr.node, direction)]),
+      order_by: list.append(body.order_by, [#(term.node, direction)]),
     )
   })
 }
 
 pub fn group_by(
   query: Query(Filtered(Select), table, row),
-  expr: Expr(t),
+  term: Term(kind, table, t),
 ) -> Query(Filtered(Select), table, row) {
   map_select(query, fn(body) {
-    Clauses(..body, group_by: list.append(body.group_by, [expr.node]))
+    Clauses(..body, group_by: list.append(body.group_by, [term.node]))
   })
 }
 
 /// Only groups that meet `condition`.
 pub fn having(
   query: Query(Filtered(Select), table, row),
-  condition: Expr(Bool),
+  condition: Term(kind, table, Bool),
 ) -> Query(Filtered(Select), table, row) {
   map_select(query, fn(body) {
     let having = case body.having {
@@ -618,6 +756,25 @@ pub fn distinct(
   query: Query(Filtered(Select), table, row),
 ) -> Query(Filtered(Select), table, row) {
   map_select(query, fn(body) { Clauses(..body, distinct: True) })
+}
+
+/// Change the query with `apply` when there is a value: an optional filter.
+///
+/// ```gleam
+/// query.from(users.table())
+/// |> query.when(search, fn(q, search) {
+///   query.where(q, query.like(users.email(), "%" <> search <> "%"))
+/// })
+/// ```
+pub fn when(
+  query: Query(kind, table, row),
+  value: Option(v),
+  apply: fn(Query(kind, table, row), v) -> Query(kind, table, row),
+) -> Query(kind, table, row) {
+  case value {
+    Some(value) -> apply(query, value)
+    None -> query
+  }
 }
 
 fn map_select(
@@ -657,26 +814,15 @@ pub fn select(
   Query(body:, decoder: selection.decoder(0))
 }
 
-/// Select `column`, then the rest.
+/// Select `term`, then the rest.
 pub fn field(
-  column: Column(table, t),
-  next: fn(t) -> Selection(table, row),
-) -> Selection(table, row) {
-  expression(ref(column), column.decoder, column.zero, next)
-}
-
-/// Select a computed value, such as `count_all()`, read with `decoder`.
-/// `zero` is any value of its type.
-pub fn expression(
-  expr: Expr(t),
-  decoder: Decoder(t),
-  zero: t,
+  term: Term(kind, table, t),
   next: fn(t) -> Selection(table, row),
 ) -> Selection(table, row) {
   Selection(
-    columns: fn() { [expr.node, ..{ next(zero).columns }()] },
+    columns: fn() { [term.node, ..{ next(term.zero).columns }()] },
     decoder: fn(position) {
-      decode.field(position, decoder, fn(value) {
+      decode.field(position, term.decoder, fn(value) {
         next(value).decoder(position + 1)
       })
     },
@@ -688,11 +834,10 @@ pub fn done(row: row) -> Selection(table, row) {
   Selection(columns: fn() { [] }, decoder: fn(_) { decode.success(row) })
 }
 
-/// Select `exprs`. Each row is `Dynamic`, its values read by position:
-/// `decode.field(0, decode.int)`.
-pub fn columns(exprs: List(Expr(t))) -> Selection(table, Dynamic) {
-  let nodes = list.map(exprs, node)
-  Selection(columns: fn() { nodes }, decoder: fn(_) { decode.dynamic })
+/// Select only `term`, so each row is its value: for a count, or for a
+/// subquery with `in_query`.
+pub fn only(term: Term(kind, table, t)) -> Selection(table, t) {
+  field(term, done)
 }
 
 // --- Compiling ---------------------------------------------------------------
@@ -870,7 +1015,7 @@ fn returning_clause(
 fn expr(s: Statement(Dynamic), node: Node) -> Statement(Dynamic) {
   case node {
     ColumnRef(table:, name:) -> sql.identifier(s, table <> "." <> name)
-    Name(name) -> sql.identifier(s, name)
+    Param(sql.Null) -> sql.append(s, "NULL")
     Param(value) -> sql.arg(s, value)
     Raw(sql:, args:) -> raw_text(s, <<sql:utf8>>, <<>>, args)
     Keyword(keyword) -> sql.append(s, keyword)

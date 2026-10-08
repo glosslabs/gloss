@@ -2,7 +2,6 @@
 //// only when GLOSS_TEST_PG_URL is set.
 
 import envoy
-import gleam/dynamic/decode
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gloss/pg
@@ -17,11 +16,11 @@ fn authors() -> Table(Authors) {
 }
 
 fn author_id() -> Column(Authors, Int) {
-  query.column(authors(), "id", decode.int, 0)
+  query.int_column(authors(), "id")
 }
 
 fn name() -> Column(Authors, String) {
-  query.column(authors(), "name", decode.string, "")
+  query.text_column(authors(), "name")
 }
 
 type Notes
@@ -31,15 +30,15 @@ fn notes() -> Table(Notes) {
 }
 
 fn note_id() -> Column(Notes, Int) {
-  query.column(notes(), "id", decode.int, 0)
+  query.int_column(notes(), "id")
 }
 
 fn author() -> Column(Notes, Int) {
-  query.column(notes(), "author", decode.int, 0)
+  query.int_column(notes(), "author")
 }
 
 fn body() -> Column(Notes, Option(String)) {
-  query.column(notes(), "body", decode.string, "") |> query.nullable
+  query.text_column(notes(), "body") |> query.nullable
 }
 
 fn start() -> Result(pool.Db, Nil) {
@@ -74,8 +73,8 @@ pub fn builds_and_runs_queries_test() {
 fn run(db: pool.Db) -> Nil {
   let assert Ok(2) =
     query.insert_rows(authors(), [
-      [query.set(name(), query.text("ada"))],
-      [query.set(name(), query.text("grace"))],
+      [query.set(name(), "ada")],
+      [query.set(name(), "grace")],
     ])
     |> query.to_statement
     |> pool.exec(db, _)
@@ -83,16 +82,13 @@ fn run(db: pool.Db) -> Nil {
   // RETURNING gives back the new row.
   let assert [first] =
     query.insert(notes(), [
-      query.set(author(), query.int(1)),
-      query.set(body(), query.some(query.text("hello"))),
+      query.set(author(), 1),
+      query.set(body(), Some("hello")),
     ])
-    |> query.select({
-      use id <- query.field(note_id())
-      query.done(id)
-    })
+    |> query.select(query.only(note_id()))
     |> ids(db, _)
   let assert Ok(1) =
-    query.insert(notes(), [query.set(author(), query.int(2))])
+    query.insert(notes(), [query.set(author(), 2)])
     |> query.to_statement
     |> pool.exec(db, _)
 
@@ -101,10 +97,10 @@ fn run(db: pool.Db) -> Nil {
     query.from(notes())
     |> query.join(
       authors(),
-      on: query.eq(query.ref(author()), query.ref(author_id())),
+      on: query.same(query.left(author()), query.right(author_id())),
     )
-    |> query.where(query.in(query.ref(author()), [query.int(1), query.int(2)]))
-    |> query.order_by(query.ref(note_id()), query.Asc)
+    |> query.where(query.in(query.left(author()), [1, 2]))
+    |> query.order_by(query.left(note_id()), query.Asc)
     |> query.select({
       use who <- query.field(query.right(name()))
       use body <- query.field(query.left(body()))
@@ -118,28 +114,25 @@ fn run(db: pool.Db) -> Nil {
   let counts =
     query.from(notes())
     |> query.where(query.in_query(
-      query.ref(author()),
+      author(),
       query.from(authors())
         |> query.where(query.raw("lower(name) like ?", [sql.Text("%a%")]))
-        |> query.select({
-          use id <- query.field(author_id())
-          query.done(id)
-        }),
+        |> query.select(query.only(author_id())),
     ))
-    |> query.group_by(query.ref(author()))
-    |> query.having(query.gte(query.count_all(), query.int(1)))
-    |> query.order_by(query.ref(author()), query.Asc)
+    |> query.group_by(author())
+    |> query.having(query.gte(query.count_all(), 1))
+    |> query.order_by(author(), query.Asc)
     |> query.select({
       use who <- query.field(author())
-      use n <- query.expression(query.count_all(), decode.int, 0)
+      use n <- query.field(query.count_all())
       query.done(#(who, n))
     })
   assert ids(db, counts) == [#(1, 1), #(2, 1)]
 
   // Update with RETURNING, then delete.
   let assert [None] =
-    query.update(notes(), [query.set(body(), query.null())])
-    |> query.where(query.eq(query.ref(note_id()), query.int(first)))
+    query.update(notes(), [query.set(body(), None)])
+    |> query.where(query.eq(note_id(), first))
     |> query.select({
       use body <- query.field(body())
       query.done(body)
@@ -147,24 +140,24 @@ fn run(db: pool.Db) -> Nil {
     |> ids(db, _)
   let assert Ok(1) =
     query.delete(notes())
-    |> query.where(query.eq(query.ref(author()), query.int(2)))
+    |> query.where(query.eq(author(), 2))
     |> query.to_statement
     |> pool.exec(db, _)
 
   // Several rows, one leaving out a column, which gets its default.
   let assert Ok(2) =
     query.insert_rows(notes(), [
-      [query.set(author(), query.int(1))],
+      [query.set(author(), 1)],
       [
-        query.set(author(), query.int(1)),
-        query.set(body(), query.some(query.text("x"))),
+        query.set(author(), 1),
+        query.set(body(), Some("x")),
       ],
     ])
     |> query.to_statement
     |> pool.exec(db, _)
   let assert Ok(2) =
     query.delete(notes())
-    |> query.where(query.gt(query.ref(note_id()), query.int(2)))
+    |> query.where(query.gt(note_id(), 2))
     |> query.to_statement
     |> pool.exec(db, _)
 
@@ -173,9 +166,6 @@ fn run(db: pool.Db) -> Nil {
     query.insert_rows(notes(), []) |> query.to_statement |> pool.exec(db, _)
   let assert Ok(_) =
     query.update(notes(), []) |> query.to_statement |> pool.exec(db, _)
-  let count = {
-    use n <- query.expression(query.count_all(), decode.int, 0)
-    query.done(n)
-  }
+  let count = query.only(query.count_all())
   assert ids(db, query.from(notes()) |> query.select(count)) == [1]
 }
