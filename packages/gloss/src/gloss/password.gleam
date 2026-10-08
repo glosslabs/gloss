@@ -17,6 +17,7 @@ import gleam/bit_array
 import gleam/crypto
 import gleam/int
 import gleam/string
+import gloss/internal/runtime
 
 const iterations = 100_000
 
@@ -44,7 +45,7 @@ pub fn verify(password: String, stored: String) -> Bool {
 }
 
 fn stretch(password: String, salt: BitArray, rounds: Int) -> BitArray {
-  pbkdf2(bit_array.from_string(password), salt, rounds)
+  runtime.pbkdf2_sha256(bit_array.from_string(password), salt, rounds, 32)
 }
 
 fn encode(rounds: Int, salt: BitArray, derived: BitArray) -> String {
@@ -55,6 +56,3 @@ fn encode(rounds: Int, salt: BitArray, derived: BitArray) -> String {
   <> "$"
   <> bit_array.base64_encode(derived, False)
 }
-
-@external(erlang, "gloss@password_ffi", "pbkdf2")
-fn pbkdf2(password: BitArray, salt: BitArray, iterations: Int) -> BitArray

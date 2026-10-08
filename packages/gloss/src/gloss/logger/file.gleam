@@ -32,6 +32,7 @@ import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import gleam/string
 import gloss/internal/logger_file_rotation as rotation
+import gloss/internal/runtime
 import gloss/logger.{type Entry, type Logger}
 
 pub opaque type Config {
@@ -218,5 +219,8 @@ fn rename(from: String, to: String) -> Nil
 @external(erlang, "gloss@logger@file_ffi", "delete")
 fn delete(path: String) -> Nil
 
-@external(erlang, "gloss@logger@file_ffi", "try_send")
-fn try_send(subject: Subject(Message), message: Message) -> Nil
+/// Send, dropping the message if the receiver is gone.
+fn try_send(subject: Subject(message), message: message) -> Nil {
+  let _ = runtime.try_send(subject, message)
+  Nil
+}

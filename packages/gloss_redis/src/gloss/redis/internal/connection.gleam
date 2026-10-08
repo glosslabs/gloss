@@ -17,6 +17,8 @@ import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 import gleam/string
+import gloss/internal/runtime
+import gloss/internal/socket as tcp
 import gloss/redis/internal/resp.{type Value}
 
 pub type Settings {
@@ -106,7 +108,8 @@ type State {
   )
 }
 
-pub type Socket
+pub type Socket =
+  tcp.Socket
 
 const min_backoff = 100
 
@@ -172,7 +175,7 @@ pub fn call(
   timeout: Int,
 ) -> Result(List(Value), Failure) {
   let reply_to = process.new_subject()
-  case try_send(connection, Request(data:, replies:, reply_to:)) {
+  case runtime.try_send(connection, Request(data:, replies:, reply_to:)) {
     False -> Error(Gone)
     True ->
       case process.receive(reply_to, timeout) {
@@ -183,7 +186,7 @@ pub fn call(
 }
 
 pub fn stop(connection: Subject(Message)) -> Nil {
-  let _ = try_send(connection, Stop)
+  let _ = runtime.try_send(connection, Stop)
   Nil
 }
 
@@ -196,7 +199,7 @@ fn on_message(state: State, message: Message) -> actor.Next(State, Message) {
           actor.continue(state)
         }
         Some(socket) ->
-          case send(socket, data) {
+          case tcp.send(socket, data) {
             Ok(Nil) -> {
               let pending =
                 deque_push_back(state.pending, Pending(replies, [], reply_to))
@@ -212,11 +215,12 @@ fn on_message(state: State, message: Message) -> actor.Next(State, Message) {
       case state.socket {
         None -> actor.continue(state)
         Some(socket) ->
-          case socket_message(socket, raw) {
-            Data(bytes) -> received(state, bytes)
-            Closed -> dropped(state, "the server closed the connection")
-            Failed(reason) -> dropped(state, reason)
-            Other -> actor.continue(state)
+          case tcp.event(socket, raw) {
+            tcp.Data(bytes) -> received(state, bytes)
+            tcp.Disconnected("closed") ->
+              dropped(state, "the server closed the connection")
+            tcp.Disconnected(reason) -> dropped(state, reason)
+            tcp.NotSocket -> actor.continue(state)
           }
       }
     Reconnect ->
@@ -241,7 +245,7 @@ fn on_message(state: State, message: Message) -> actor.Next(State, Message) {
           }
       }
     Stop -> {
-      option.map(state.socket, close)
+      option.map(state.socket, tcp.close)
       fail_all(state.pending, Lost("the connection was closed"))
       actor.stop()
     }
@@ -290,7 +294,7 @@ fn deliver(state: State, value: Value) -> State {
 
 /// The socket is gone: fail what was in flight, then reconnect or stop.
 fn dropped(state: State, reason: String) -> actor.Next(State, Message) {
-  option.map(state.socket, close)
+  option.map(state.socket, tcp.close)
   fail_all(state.pending, Lost(reason))
   let state =
     State(
@@ -317,13 +321,25 @@ fn fail_all(pending: Deque(Pending), failure: Failure) -> Nil {
 /// Connect, authenticate and select the database, then turn the socket
 /// active so replies arrive as messages.
 fn open(settings: Settings) -> Result(Socket, String) {
-  use socket <- result.try(connect(
+  use socket <- result.try(tcp.connect(
     settings.host,
     settings.port,
-    settings.tls,
-    settings.verify,
     settings.connect_timeout,
   ))
+  use socket <- result.try(case settings.tls {
+    True ->
+      tcp.upgrade(
+        socket,
+        settings.host,
+        settings.verify,
+        settings.connect_timeout,
+      )
+      |> result.map_error(fn(reason) {
+        tcp.close(socket)
+        reason
+      })
+    False -> Ok(socket)
+  })
   let handshake =
     list.flatten([
       case settings.password, settings.username {
@@ -342,7 +358,7 @@ fn open(settings: Settings) -> Result(Socket, String) {
     [] -> Ok(<<>>)
     _ -> {
       let data = list.map(handshake, resp.encode) |> bytes_tree.concat
-      use Nil <- result.try(send(socket, data))
+      use Nil <- result.try(tcp.send(socket, data))
       use #(values, rest) <- result.try(read(
         socket,
         <<>>,
@@ -357,26 +373,26 @@ fn open(settings: Settings) -> Result(Socket, String) {
   }
   case checked {
     Error(reason) -> {
-      close(socket)
+      tcp.close(socket)
       Error(reason)
     }
     Ok(rest) -> {
       let setup = list.map(settings.on_connect, resp.encode)
       let sent = case setup {
         [] -> Ok(Nil)
-        _ -> send(socket, bytes_tree.concat(setup))
+        _ -> tcp.send(socket, bytes_tree.concat(setup))
       }
       case sent, rest {
         Ok(Nil), <<>> -> {
-          activate(socket)
+          tcp.activate(socket)
           Ok(socket)
         }
         Ok(Nil), _ -> {
-          close(socket)
+          tcp.close(socket)
           Error("unexpected data after the handshake")
         }
         Error(reason), _ -> {
-          close(socket)
+          tcp.close(socket)
           Error(reason)
         }
       }
@@ -398,7 +414,9 @@ fn read(
   count: Int,
   timeout: Int,
 ) -> Result(#(List(Value), BitArray), String) {
-  use bytes <- result.try(recv(socket, timeout))
+  use bytes <- result.try(
+    tcp.recv(socket, 0, timeout) |> result.map_error(describe_recv),
+  )
   let data = bit_array.append(buffer, bytes)
   use #(values, rest) <- result.try(resp.parse_all(data))
   case list.length(values) >= count {
@@ -406,40 +424,6 @@ fn read(
     False -> read(socket, data, count, timeout)
   }
 }
-
-type SocketEvent {
-  Data(BitArray)
-  Closed
-  Failed(String)
-  Other
-}
-
-@external(erlang, "gloss@redis_ffi", "connect")
-fn connect(
-  host: String,
-  port: Int,
-  tls: Bool,
-  verify: Bool,
-  timeout: Int,
-) -> Result(Socket, String)
-
-@external(erlang, "gloss@redis_ffi", "send")
-fn send(socket: Socket, data: BytesTree) -> Result(Nil, String)
-
-@external(erlang, "gloss@redis_ffi", "recv")
-fn recv(socket: Socket, timeout: Int) -> Result(BitArray, String)
-
-@external(erlang, "gloss@redis_ffi", "activate")
-fn activate(socket: Socket) -> Nil
-
-@external(erlang, "gloss@redis_ffi", "close")
-fn close(socket: Socket) -> Nil
-
-@external(erlang, "gloss@redis_ffi", "socket_message")
-fn socket_message(socket: Socket, message: Dynamic) -> SocketEvent
-
-@external(erlang, "gloss@redis_ffi", "try_send")
-fn try_send(subject: Subject(a), message: a) -> Bool
 
 /// For error messages.
 pub fn describe(failure: Failure) -> String {
@@ -450,4 +434,12 @@ pub fn describe(failure: Failure) -> String {
     Gone -> "not running"
   }
   |> string.trim
+}
+
+fn describe_recv(error: tcp.RecvError) -> String {
+  case error {
+    tcp.Timeout -> "timeout"
+    tcp.Closed -> "closed"
+    tcp.Failed(reason) -> reason
+  }
 }

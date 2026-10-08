@@ -2,7 +2,6 @@
 //// running statements over the binary (prepared) and text protocols.
 
 import gleam/bit_array
-import gleam/bytes_tree.{type BytesTree}
 import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type Pid}
 import gleam/int
@@ -10,18 +9,15 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import gloss/internal/socket as tcp
+import gloss/internal/statement_cache
 import gloss/mysql/internal/auth
 import gloss/mysql/internal/codec
 import gloss/mysql/internal/protocol.{type Column, type ServerError}
 import gloss/sql
 
-pub type Socket
-
-pub type RecvError {
-  Timeout
-  Closed
-  Failed(String)
-}
+pub type Socket =
+  tcp.Socket
 
 pub type Tls {
   NoTls
@@ -55,9 +51,9 @@ pub type MyConnection {
   MyConnection(socket: Socket, cache: Option(Cache), deprecate_eof: Bool)
 }
 
-/// Statements prepared on this connection, by SQL text. An ETS table, so
-/// whichever process has borrowed the connection can use it.
-pub type Cache
+/// Statements prepared on this connection, by SQL text.
+pub type Cache =
+  statement_cache.Cache(Statement)
 
 /// A statement prepared on the server.
 pub type Statement {
@@ -73,7 +69,7 @@ pub fn open(
 ) -> Result(MyConnection, sql.Error) {
   let deadline = now_ms() + settings.connect_timeout
   use socket <- result.try(
-    ffi_connect(settings.host, settings.port, settings.connect_timeout)
+    tcp.connect(settings.host, settings.port, settings.connect_timeout)
     |> result.map_error(sql.ConnectionFailed),
   )
   let opened = {
@@ -95,13 +91,13 @@ pub fn open(
   case opened {
     Ok(connection) -> {
       let cache = case cache_size > 0 {
-        True -> Some(ffi_cache_new(cache_size))
+        True -> Some(statement_cache.new(cache_size))
         False -> None
       }
       Ok(MyConnection(..connection, cache:))
     }
     Error(error) -> {
-      ffi_close(socket)
+      tcp.close(socket)
       Error(as_connection_failure(error))
     }
   }
@@ -198,7 +194,7 @@ fn negotiate_tls(
         sequence,
       ))
       use socket <- result.map(
-        ffi_upgrade(
+        tcp.upgrade(
           reader.socket,
           settings.host,
           tls == VerifyTls,
@@ -367,14 +363,14 @@ pub fn run(
     }
     Some(cache) -> {
       use Nil <- result.try(close_evicted(connection, cache))
-      case ffi_cache_lookup(cache, sql) {
+      case statement_cache.lookup(cache, sql) {
         Ok(statement) -> {
           let result = execute(connection, statement, params, deadline)
           case result {
             // The server forgot the statement or wants it prepared again.
             Error(sql.QueryFailed(code: "1243", ..))
             | Error(sql.QueryFailed(code: "1615", ..)) -> {
-              ffi_cache_delete(cache, sql)
+              statement_cache.delete(cache, sql)
               use Nil <- result.try(close_evicted(connection, cache))
               prepare_and_execute(connection, cache, sql, params, deadline)
             }
@@ -396,7 +392,7 @@ fn prepare_and_execute(
   deadline: Int,
 ) -> Result(Executed, sql.Error) {
   use statement <- result.try(prepare(connection, sql, deadline))
-  ffi_cache_put(cache, sql, statement)
+  statement_cache.put(cache, sql, statement)
   execute(connection, statement, params, deadline)
 }
 
@@ -405,7 +401,7 @@ fn close_evicted(
   connection: MyConnection,
   cache: Cache,
 ) -> Result(Nil, sql.Error) {
-  ffi_cache_take_closing(cache)
+  statement_cache.take_closing(cache)
   |> list.try_each(fn(statement: Statement) {
     send(connection.socket, protocol.close_statement(statement.id), 0)
   })
@@ -640,7 +636,7 @@ fn close_when_broken(
 ) -> Result(a, sql.Error) {
   let result = work()
   case result {
-    Error(sql.QueryTimeout) | Error(sql.ConnectionLost(_)) -> ffi_close(socket)
+    Error(sql.QueryTimeout) | Error(sql.ConnectionLost(_)) -> tcp.close(socket)
     _ -> Nil
   }
   result
@@ -649,23 +645,23 @@ fn close_when_broken(
 // --- Lifecycle ---------------------------------------------------------------
 
 pub fn alive(connection: MyConnection) -> Bool {
-  ffi_alive(connection.socket)
+  tcp.alive(connection.socket)
 }
 
 /// Make `pid` the owner of the socket and the cache.
 pub fn transfer(connection: MyConnection, pid: Pid) -> Nil {
-  ffi_transfer(connection.socket, pid)
+  tcp.transfer(connection.socket, pid)
   case connection.cache {
-    Some(cache) -> ffi_cache_give(cache, pid)
+    Some(cache) -> statement_cache.give(cache, pid)
     None -> Nil
   }
 }
 
 pub fn close(connection: MyConnection) -> Nil {
   let _ = send(connection.socket, protocol.quit(), 0)
-  ffi_close(connection.socket)
+  tcp.close(connection.socket)
   case connection.cache {
-    Some(cache) -> ffi_cache_drop(cache)
+    Some(cache) -> statement_cache.drop(cache)
     None -> Nil
   }
 }
@@ -678,7 +674,7 @@ fn send(
   sequence: Int,
 ) -> Result(Nil, sql.Error) {
   let #(data, _) = protocol.frame(payload, sequence)
-  ffi_send(socket, data) |> result.map_error(sql.ConnectionLost)
+  tcp.send(socket, data) |> result.map_error(sql.ConnectionLost)
 }
 
 /// The next logical packet: its last sequence id and its payload, joined
@@ -726,11 +722,11 @@ fn recv(
   case remaining(deadline) {
     0 -> Error(sql.QueryTimeout)
     timeout ->
-      case ffi_recv(socket, length, timeout) {
+      case tcp.recv(socket, length, timeout) {
         Ok(data) -> Ok(data)
-        Error(Timeout) -> Error(sql.QueryTimeout)
-        Error(Closed) -> Error(sql.ConnectionLost("closed by the server"))
-        Error(Failed(reason)) -> Error(sql.ConnectionLost(reason))
+        Error(tcp.Timeout) -> Error(sql.QueryTimeout)
+        Error(tcp.Closed) -> Error(sql.ConnectionLost("closed by the server"))
+        Error(tcp.Failed(reason)) -> Error(sql.ConnectionLost(reason))
       }
   }
 }
@@ -827,56 +823,5 @@ fn now_ms() -> Int {
 @external(erlang, "erlang", "monotonic_time")
 fn monotonic_time(unit: Atom) -> Int
 
-@external(erlang, "gloss@mysql_ffi", "connect")
-fn ffi_connect(host: String, port: Int, timeout: Int) -> Result(Socket, String)
-
-@external(erlang, "gloss@mysql_ffi", "upgrade")
-fn ffi_upgrade(
-  socket: Socket,
-  host: String,
-  verify: Bool,
-  timeout: Int,
-) -> Result(Socket, String)
-
-@external(erlang, "gloss@mysql_ffi", "send")
-fn ffi_send(socket: Socket, data: BytesTree) -> Result(Nil, String)
-
-@external(erlang, "gloss@mysql_ffi", "recv")
-fn ffi_recv(
-  socket: Socket,
-  length: Int,
-  timeout: Int,
-) -> Result(BitArray, RecvError)
-
-@external(erlang, "gloss@mysql_ffi", "alive")
-fn ffi_alive(socket: Socket) -> Bool
-
-@external(erlang, "gloss@mysql_ffi", "transfer")
-fn ffi_transfer(socket: Socket, pid: Pid) -> Nil
-
-@external(erlang, "gloss@mysql_ffi", "close")
-fn ffi_close(socket: Socket) -> Nil
-
 @external(erlang, "gloss@mysql_ffi", "rsa_encrypt")
 fn ffi_rsa_encrypt(pem: BitArray, data: BitArray) -> Result(BitArray, Nil)
-
-@external(erlang, "gloss@mysql_ffi", "cache_new")
-fn ffi_cache_new(size: Int) -> Cache
-
-@external(erlang, "gloss@mysql_ffi", "cache_lookup")
-fn ffi_cache_lookup(cache: Cache, sql: String) -> Result(Statement, Nil)
-
-@external(erlang, "gloss@mysql_ffi", "cache_put")
-fn ffi_cache_put(cache: Cache, sql: String, statement: Statement) -> Nil
-
-@external(erlang, "gloss@mysql_ffi", "cache_delete")
-fn ffi_cache_delete(cache: Cache, sql: String) -> Nil
-
-@external(erlang, "gloss@mysql_ffi", "cache_take_closing")
-fn ffi_cache_take_closing(cache: Cache) -> List(Statement)
-
-@external(erlang, "gloss@mysql_ffi", "cache_give")
-fn ffi_cache_give(cache: Cache, pid: Pid) -> Nil
-
-@external(erlang, "gloss@mysql_ffi", "cache_drop")
-fn ffi_cache_drop(cache: Cache) -> Nil

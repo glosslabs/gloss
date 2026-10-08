@@ -7,6 +7,7 @@ import gleam/int
 import gleam/list
 import gleam/result
 import gleam/string
+import gloss/internal/runtime
 
 pub type Client {
   Client(nonce: String, first_bare: String)
@@ -41,7 +42,7 @@ pub fn client_final(
   )
   use <- guard(string.starts_with(server_nonce, client.nonce) && iterations > 0)
 
-  let salted = pbkdf2(<<password:utf8>>, salt, iterations)
+  let salted = runtime.pbkdf2_sha256(<<password:utf8>>, salt, iterations, 32)
   let client_key = crypto.hmac(<<"Client Key":utf8>>, crypto.Sha256, salted)
   let stored_key = crypto.hash(crypto.Sha256, client_key)
   let without_proof = "c=biws,r=" <> server_nonce
@@ -80,9 +81,6 @@ fn guard(condition: Bool, next: fn() -> Result(a, Nil)) -> Result(a, Nil) {
     False -> Error(Nil)
   }
 }
-
-@external(erlang, "gloss@pg_ffi", "pbkdf2")
-fn pbkdf2(password: BitArray, salt: BitArray, iterations: Int) -> BitArray
 
 @external(erlang, "crypto", "exor")
 fn exor(a: BitArray, b: BitArray) -> BitArray

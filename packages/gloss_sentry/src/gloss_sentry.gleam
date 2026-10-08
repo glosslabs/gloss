@@ -49,6 +49,7 @@ import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result
 import gleam/string
 import gleam/time/timestamp
+import gloss/internal/runtime
 import gloss/logger.{type Logger}
 import gloss/meta.{type Meta}
 import gloss/tracer
@@ -326,11 +327,6 @@ fn perform(shell: Shell, effect: engine.Effect) -> Shell {
   }
 }
 
-/// Sends to the subject, swallowing the panic `process.send` raises while
-/// a named subject's name is unregistered.
-@external(erlang, "gloss_sentry_ffi", "try_send")
-fn try_send(subject: Subject(Message), message: Message) -> Nil
-
 /// A uuid4 as 32 lowercase hex characters.
 fn event_id() -> String {
   let assert <<
@@ -347,4 +343,10 @@ fn event_id() -> String {
 
 fn node_name() -> String {
   node.self() |> node.name |> atom.to_string
+}
+
+/// Send, dropping the message if the receiver is gone.
+fn try_send(subject: Subject(message), message: message) -> Nil {
+  let _ = runtime.try_send(subject, message)
+  Nil
 }

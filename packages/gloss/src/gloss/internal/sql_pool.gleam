@@ -16,6 +16,7 @@ import gleam/list
 import gleam/otp/actor
 import gleam/result
 import gleam/string
+import gloss/internal/runtime
 
 /// A connection on loan to one process.
 pub type Lease(conn) {
@@ -113,14 +114,14 @@ pub fn checkout(
   timed_out timed_out: error,
 ) -> Result(Lease(conn), error) {
   let reply = process.new_subject()
-  case try_send(pool, Checkout(process.self(), reply)) {
+  case runtime.try_send(pool, Checkout(process.self(), reply)) {
     False -> Error(unavailable)
     True ->
       case process.receive(reply, timeout) {
         Ok(outcome) -> outcome
         Error(Nil) -> {
           // Forget us, then give back a lease that arrived meanwhile.
-          let _ = try_send(pool, Cancel(reply))
+          let _ = runtime.try_send(pool, Cancel(reply))
           case process.receive(reply, 0) {
             Ok(Ok(lease)) -> checkin(pool, lease, True)
             _ -> Nil
@@ -136,12 +137,12 @@ pub fn checkin(
   lease: Lease(conn),
   reuse: Bool,
 ) -> Nil {
-  let _ = try_send(pool, Checkin(lease.id, reuse))
+  let _ = runtime.try_send(pool, Checkin(lease.id, reuse))
   Nil
 }
 
 pub fn shutdown(pool: Subject(Message(conn, error))) -> Nil {
-  let _ = try_send(pool, Shutdown)
+  let _ = runtime.try_send(pool, Shutdown)
   Nil
 }
 
@@ -319,6 +320,3 @@ fn element(index: Int, tuple: Crash) -> b
 fn describe_crash(crash: Crash) -> String {
   string.inspect(element(3, crash))
 }
-
-@external(erlang, "gloss@sql_ffi", "try_send")
-fn try_send(subject: Subject(message), message: message) -> Bool

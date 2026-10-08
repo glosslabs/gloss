@@ -12,18 +12,15 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import gloss/internal/socket as tcp
+import gloss/internal/statement_cache
 import gloss/pg/internal/protocol.{type Message}
 import gloss/pg/internal/scram
 import gloss/sql
 import gloss/sql/internal/postgres as codec
 
-pub type Socket
-
-pub type RecvError {
-  Timeout
-  Closed
-  Failed(String)
-}
+pub type Socket =
+  tcp.Socket
 
 pub type Tls {
   NoTls
@@ -56,7 +53,7 @@ type Reader {
 pub fn connect(settings: Settings) -> Result(Socket, sql.Error) {
   let deadline = now_ms() + settings.connect_timeout
   use socket <- result.try(
-    ffi_connect(settings.host, settings.port, settings.connect_timeout)
+    tcp.connect(settings.host, settings.port, settings.connect_timeout)
     |> result.map_error(sql.ConnectionFailed),
   )
   let opened = {
@@ -97,7 +94,7 @@ fn negotiate_tls(
       use Nil <- result.try(send(socket, protocol.ssl_request()))
       case recv(socket, deadline) {
         Ok(<<"S":utf8>>) ->
-          ffi_upgrade(
+          tcp.upgrade(
             socket,
             settings.host,
             tls == VerifyTls,
@@ -236,9 +233,10 @@ pub type PgConnection {
   PgConnection(socket: Socket, cache: Option(Cache))
 }
 
-/// Statements prepared on this connection, by SQL text. An ETS table, so
-/// whichever process has borrowed the connection can use it.
-pub type Cache
+/// Statements prepared on this connection, by SQL text: each one's name
+/// and column types.
+pub type Cache =
+  statement_cache.Cache(#(String, List(Int)))
 
 /// Open a connection that keeps up to `cache_size` prepared statements.
 pub fn open(
@@ -247,7 +245,7 @@ pub fn open(
 ) -> Result(PgConnection, sql.Error) {
   use socket <- result.map(connect(settings))
   let cache = case cache_size > 0 {
-    True -> Some(ffi_cache_new(cache_size))
+    True -> Some(statement_cache.new(cache_size))
     False -> None
   }
   PgConnection(socket:, cache:)
@@ -296,7 +294,7 @@ pub fn run(
       |> result.try(fn(reply) { reply.result })
     }
     Some(cache) ->
-      case ffi_cache_lookup(cache, sql) {
+      case statement_cache.lookup(cache, sql) {
         Error(Nil) -> prepare_and_run(socket, cache, sql, args, timeout)
         Ok(#(name, types)) -> {
           let request =
@@ -310,7 +308,7 @@ pub fn run(
             Error(sql.QueryFailed(code:, ..))
               if code == "0A000" || code == "26000"
             -> {
-              ffi_cache_delete(cache, sql)
+              statement_cache.delete(cache, sql)
               case reply.status {
                 "I" -> prepare_and_run(socket, cache, sql, args, timeout)
                 _ -> reply.result
@@ -330,7 +328,7 @@ fn prepare_and_run(
   args: List(protocol.Parameter),
   timeout: Int,
 ) -> Result(sql.Outcome, sql.Error) {
-  let name = ffi_cache_next_name(cache)
+  let name = "gloss_" <> int.to_string(statement_cache.next_id(cache))
   let request =
     list.append(closes(cache), [
       protocol.parse(name, sql),
@@ -341,7 +339,7 @@ fn prepare_and_run(
     ])
   use reply <- result.try(request_reply(socket, request, [], timeout))
   case reply.parsed {
-    True -> ffi_cache_put(cache, sql, name, reply.types)
+    True -> statement_cache.put(cache, sql, #(name, reply.types))
     False -> Nil
   }
   reply.result
@@ -350,7 +348,9 @@ fn prepare_and_run(
 /// Close messages for evicted statements, sent ahead of the next request.
 /// Closing a statement that doesn't exist is not an error.
 fn closes(cache: Cache) -> List(BytesTree) {
-  list.map(ffi_cache_take_closing(cache), protocol.close_statement)
+  list.map(statement_cache.take_closing(cache), fn(statement) {
+    protocol.close_statement(statement.0)
+  })
 }
 
 fn request_reply(
@@ -377,7 +377,7 @@ fn close_when_broken(
 ) -> Result(a, sql.Error) {
   let result = work()
   case result {
-    Error(sql.QueryTimeout) | Error(sql.ConnectionLost(_)) -> ffi_close(socket)
+    Error(sql.QueryTimeout) | Error(sql.ConnectionLost(_)) -> tcp.close(socket)
     _ -> Nil
   }
   result
@@ -580,14 +580,14 @@ fn read_copy_out(
 // --- Lifecycle ---------------------------------------------------------------
 
 pub fn alive(connection: PgConnection) -> Bool {
-  ffi_alive(connection.socket)
+  tcp.alive(connection.socket)
 }
 
 /// Make `pid` the owner of the socket and the cache.
 pub fn transfer(connection: PgConnection, pid: Pid) -> Nil {
-  ffi_transfer(connection.socket, pid)
+  tcp.transfer(connection.socket, pid)
   case connection.cache {
-    Some(cache) -> ffi_cache_give(cache, pid)
+    Some(cache) -> statement_cache.give(cache, pid)
     None -> Nil
   }
 }
@@ -595,14 +595,14 @@ pub fn transfer(connection: PgConnection, pid: Pid) -> Nil {
 pub fn close(connection: PgConnection) -> Nil {
   close_socket(connection.socket)
   case connection.cache {
-    Some(cache) -> ffi_cache_drop(cache)
+    Some(cache) -> statement_cache.drop(cache)
     None -> Nil
   }
 }
 
 pub fn close_socket(socket: Socket) -> Nil {
-  let _ = ffi_send(socket, protocol.terminate())
-  ffi_close(socket)
+  let _ = tcp.send(socket, protocol.terminate())
+  tcp.close(socket)
 }
 
 // --- A socket in active mode, for a listener ---------------------------------
@@ -616,19 +616,19 @@ pub type SocketMessage {
 
 /// Deliver the next bytes received as a message to the owner.
 pub fn activate(socket: Socket) -> Nil {
-  ffi_activate(socket)
+  tcp.activate_once(socket)
 }
 
 /// Stop delivering messages, returning bytes delivered but not yet handled.
 pub fn deactivate(socket: Socket) -> BitArray {
-  ffi_deactivate(socket)
+  tcp.deactivate(socket)
 }
 
 pub fn socket_message(socket: Socket, message: Dynamic) -> SocketMessage {
-  case ffi_socket_message(socket, message) {
-    RawData(data) -> Data(data)
-    RawClosed -> SocketClosed
-    RawOther -> NotSocket
+  case tcp.event(socket, message) {
+    tcp.Data(data) -> Data(data)
+    tcp.Disconnected(_) -> SocketClosed
+    tcp.NotSocket -> NotSocket
   }
 }
 
@@ -685,7 +685,7 @@ fn await_command(
 // --- Reading and writing -----------------------------------------------------
 
 fn send(socket: Socket, data: BytesTree) -> Result(Nil, sql.Error) {
-  ffi_send(socket, data) |> result.map_error(sql.ConnectionLost)
+  tcp.send(socket, data) |> result.map_error(sql.ConnectionLost)
 }
 
 fn next(reader: Reader) -> Result(#(Message, Reader), sql.Error) {
@@ -708,11 +708,11 @@ fn recv(socket: Socket, deadline: Int) -> Result(BitArray, sql.Error) {
   case remaining(deadline) {
     0 -> Error(sql.QueryTimeout)
     timeout ->
-      case ffi_recv(socket, timeout) {
+      case tcp.recv(socket, 0, timeout) {
         Ok(data) -> Ok(data)
-        Error(Timeout) -> Error(sql.QueryTimeout)
-        Error(Closed) -> Error(sql.ConnectionLost("closed by the server"))
-        Error(Failed(reason)) -> Error(sql.ConnectionLost(reason))
+        Error(tcp.Timeout) -> Error(sql.QueryTimeout)
+        Error(tcp.Closed) -> Error(sql.ConnectionLost("closed by the server"))
+        Error(tcp.Failed(reason)) -> Error(sql.ConnectionLost(reason))
       }
   }
 }
@@ -741,76 +741,3 @@ fn now_ms() -> Int {
 
 @external(erlang, "erlang", "monotonic_time")
 fn monotonic_time(unit: Atom) -> Int
-
-@external(erlang, "gloss@pg_ffi", "connect")
-fn ffi_connect(host: String, port: Int, timeout: Int) -> Result(Socket, String)
-
-@external(erlang, "gloss@pg_ffi", "upgrade")
-fn ffi_upgrade(
-  socket: Socket,
-  host: String,
-  verify: Bool,
-  timeout: Int,
-) -> Result(Socket, String)
-
-@external(erlang, "gloss@pg_ffi", "send")
-fn ffi_send(socket: Socket, data: BytesTree) -> Result(Nil, String)
-
-@external(erlang, "gloss@pg_ffi", "recv")
-fn ffi_recv(socket: Socket, timeout: Int) -> Result(BitArray, RecvError)
-
-@external(erlang, "gloss@pg_ffi", "alive")
-fn ffi_alive(socket: Socket) -> Bool
-
-@external(erlang, "gloss@pg_ffi", "transfer")
-fn ffi_transfer(socket: Socket, pid: Pid) -> Nil
-
-@external(erlang, "gloss@pg_ffi", "close")
-fn ffi_close(socket: Socket) -> Nil
-
-@external(erlang, "gloss@pg_ffi", "activate")
-fn ffi_activate(socket: Socket) -> Nil
-
-@external(erlang, "gloss@pg_ffi", "deactivate")
-fn ffi_deactivate(socket: Socket) -> BitArray
-
-type RawSocketMessage {
-  RawData(BitArray)
-  RawClosed
-  RawOther
-}
-
-@external(erlang, "gloss@pg_ffi", "socket_message")
-fn ffi_socket_message(socket: Socket, message: Dynamic) -> RawSocketMessage
-
-@external(erlang, "gloss@pg_ffi", "cache_new")
-fn ffi_cache_new(size: Int) -> Cache
-
-@external(erlang, "gloss@pg_ffi", "cache_lookup")
-fn ffi_cache_lookup(
-  cache: Cache,
-  sql: String,
-) -> Result(#(String, List(Int)), Nil)
-
-@external(erlang, "gloss@pg_ffi", "cache_next_name")
-fn ffi_cache_next_name(cache: Cache) -> String
-
-@external(erlang, "gloss@pg_ffi", "cache_put")
-fn ffi_cache_put(
-  cache: Cache,
-  sql: String,
-  name: String,
-  types: List(Int),
-) -> Nil
-
-@external(erlang, "gloss@pg_ffi", "cache_delete")
-fn ffi_cache_delete(cache: Cache, sql: String) -> Nil
-
-@external(erlang, "gloss@pg_ffi", "cache_take_closing")
-fn ffi_cache_take_closing(cache: Cache) -> List(String)
-
-@external(erlang, "gloss@pg_ffi", "cache_give")
-fn ffi_cache_give(cache: Cache, pid: Pid) -> Nil
-
-@external(erlang, "gloss@pg_ffi", "cache_drop")
-fn ffi_cache_drop(cache: Cache) -> Nil

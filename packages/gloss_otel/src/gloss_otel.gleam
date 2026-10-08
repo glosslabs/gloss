@@ -52,6 +52,7 @@ import gleam/result
 import gleam/string
 import gleam/time/duration.{type Duration}
 import gleam/time/timestamp
+import gloss/internal/runtime
 import gloss/logger.{type Logger}
 import gloss/meta.{type Meta}
 import gloss/tracer
@@ -347,11 +348,12 @@ fn int_max(a: Int, b: Int) -> Int {
   }
 }
 
-/// Sends to the subject, swallowing the panic `process.send` raises while
-/// a named subject's name is unregistered.
-@external(erlang, "gloss_otel_ffi", "try_send")
-fn try_send(subject: Subject(Message), message: Message) -> Nil
-
 fn node_name() -> String {
   node.self() |> node.name |> atom.to_string
+}
+
+/// Send, dropping the message if the receiver is gone.
+fn try_send(subject: Subject(message), message: message) -> Nil {
+  let _ = runtime.try_send(subject, message)
+  Nil
 }

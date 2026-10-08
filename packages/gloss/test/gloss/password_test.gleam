@@ -1,6 +1,7 @@
 import gleam/bit_array
 import gleam/string
 import gleeunit/should
+import gloss/internal/runtime
 import gloss/password
 
 pub fn hash_and_verify_test() {
@@ -36,5 +37,6 @@ pub fn the_cost_is_read_from_the_hash_test() {
   |> should.be_false
 }
 
-@external(erlang, "gloss@password_ffi", "pbkdf2")
-fn pbkdf2(password: BitArray, salt: BitArray, iterations: Int) -> BitArray
+fn pbkdf2(password: BitArray, salt: BitArray, iterations: Int) -> BitArray {
+  runtime.pbkdf2_sha256(password, salt, iterations, 32)
+}

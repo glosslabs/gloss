@@ -54,6 +54,7 @@ import gleam/result
 import gleam/string
 import gleam/time/duration.{type Duration}
 import gleam/time/timestamp
+import gloss/internal/runtime
 import gloss/meta
 import gloss/redis/internal/connection
 import gloss/redis/internal/resp
@@ -240,7 +241,7 @@ pub fn from_name(name: Name(Message)) -> Redis {
 pub fn shutdown(redis: Redis) -> Nil {
   case resolve(redis) {
     Ok(Pool(owner: Some(owner), ..)) -> {
-      let _ = try_send(owner, Shutdown)
+      let _ = runtime.try_send(owner, Shutdown)
       Nil
     }
     Ok(pool) -> list.each(pool.subjects, connection.stop)
@@ -896,7 +897,7 @@ pub fn subscribe(
           ]) ->
             case bit_array.to_string(channel) {
               Ok(channel) -> {
-                let _ = try_send(to, Published(channel:, payload:))
+                let _ = runtime.try_send(to, Published(channel:, payload:))
                 Nil
               }
               Error(Nil) -> Nil
@@ -1027,6 +1028,3 @@ fn pool_put(name: Name(Message), pool: Pool) -> Nil
 
 @external(erlang, "gloss@redis_ffi", "pool_get")
 fn pool_get(name: Name(Message)) -> Result(Pool, Nil)
-
-@external(erlang, "gloss@redis_ffi", "try_send")
-fn try_send(subject: Subject(a), message: a) -> Bool

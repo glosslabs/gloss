@@ -1,5 +1,5 @@
 -module(gloss@logger@file_ffi).
--export([open/1, write/2, close/1, size/1, rename/2, delete/1, try_send/2]).
+-export([open/1, write/2, close/1, size/1, rename/2, delete/1]).
 
 %% File primitives for gloss/logger/file. Failures are returned or
 %% swallowed, never raised: a log channel must not crash its caller.
@@ -30,10 +30,4 @@ rename(From, To) ->
 
 delete(Path) ->
     _ = file:delete(Path),
-    nil.
-
-%% Sending to a named subject whose name is not registered panics in
-%% gleam_erlang; a log writer must not, so swallow it.
-try_send(Subject, Message) ->
-    try 'gleam@erlang@process':send(Subject, Message) catch _:_ -> nil end,
     nil.
