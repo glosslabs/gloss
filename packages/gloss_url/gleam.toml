@@ -1,0 +1,16 @@
+name = "gloss_url"
+version = "0.1.0"
+description = "Building and reading URLs and query strings, on the BEAM and in JavaScript"
+licenses = ["MIT"]
+
+[repository]
+type = "github"
+user = "glosslabs"
+repo = "gloss"
+path = "packages/gloss_url"
+
+[dependencies]
+gleam_stdlib = ">= 1.0.5 and < 2.0.0"
+
+[dev_dependencies]
+gleeunit = ">= 1.11.0 and < 2.0.0"
