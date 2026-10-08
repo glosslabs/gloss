@@ -15,7 +15,8 @@
 ////
 //// The handler records every span and point by trace, and the logger
 //// records what handlers log (each handler's logger carries its request's
-//// trace). The middleware adds a script and stylesheet before `</body>` of
+//// trace). The middleware records the request's session, as it was stored
+//// before the request and after it, when there is one. The middleware adds a script and stylesheet before `</body>` of
 //// each HTML response, and serves them, and the recorded data as JSON,
 //// under `/_gloss/debug/`. The script fetches the data once the page has
 //// loaded, so the request's own span is there too. Both are files rather
@@ -27,17 +28,18 @@
 //// `logger.trace_handler` as well, or every event is recorded twice.
 ////
 //// Everything recorded is kept for ten minutes. **Use it only in
-//// development**: the data includes SQL, log lines and request details,
-//// and anyone who can reach the server can read it.
+//// development**: the data includes SQL, log lines, session contents and
+//// request details, and anyone who can reach the server can read it.
 
 import gleam/bit_array
 import gleam/bytes_tree
+import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/http/response
 import gleam/int
 import gleam/json.{type Json}
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 import gleam/string
@@ -45,6 +47,7 @@ import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
 import gloss/http/context.{type Context, type Middleware}
 import gloss/http/reply.{type Request, type Response}
+import gloss/http/session
 import gloss/logger.{type Logger}
 import gloss/meta.{type Meta}
 import gloss/tracer
@@ -59,6 +62,11 @@ pub opaque type DebugBar {
 type Item {
   Event(tracer.Event)
   Log(logger.Entry)
+  /// The request's session data before and after it ran.
+  Session(
+    before: Option(Dict(String, String)),
+    after: Option(Dict(String, String)),
+  )
 }
 
 type Message {
@@ -132,7 +140,22 @@ pub fn middleware(bar: DebugBar) -> Middleware(state) {
     fn(req: Request, ctx: Context(state)) {
       case req.path {
         "/_gloss/debug/" <> rest -> serve(bar, rest)
-        _ -> inject(handler(req, ctx), ctx.trace.trace_id)
+        _ -> {
+          let before = session.peek(ctx.sessions, req, None)
+          let res = handler(req, ctx)
+          let after = session.peek(ctx.sessions, req, Some(res))
+          case before, after {
+            None, None -> Nil
+            _, _ ->
+              insert(
+                bar.table,
+                ctx.trace.trace_id,
+                False,
+                Session(before:, after:),
+              )
+          }
+          inject(res, ctx.trace.trace_id)
+        }
       }
     }
   }
@@ -271,6 +294,12 @@ fn item_json(item: Item) -> Json {
         #("level", json.string(tracer_level(level))),
         #("meta", meta_json(meta)),
       ])
+    Session(before:, after:) ->
+      json.object([
+        #("kind", json.string("session")),
+        #("before", json.nullable(before, session_json)),
+        #("after", json.nullable(after, session_json)),
+      ])
     Log(entry) ->
       json.object([
         #("kind", json.string("log")),
@@ -287,6 +316,13 @@ fn item_json(item: Item) -> Json {
         ),
       ])
   }
+}
+
+fn session_json(data: Dict(String, String)) -> Json {
+  dict.to_list(data)
+  |> list.sort(fn(a, b) { string.compare(a.0, b.0) })
+  |> list.map(fn(entry) { #(entry.0, json.string(entry.1)) })
+  |> json.object
 }
 
 fn meta_json(meta: Meta) -> Json {
@@ -389,6 +425,7 @@ const script =
     timeline: 'Timeline',
     queries: 'Queries',
     logs: 'Logs',
+    session: 'Session',
     requests: 'Requests',
   };
 
@@ -493,6 +530,39 @@ const script =
     return list;
   }
 
+  function sessionView(items) {
+    const found = items.find((i) => i.kind === 'session');
+    if (!found) return h('p', 'empty', 'No session.');
+    const before = found.before || {};
+    const after = found.after || {};
+    const wrap = h('div', '');
+    if (!found.before && found.after) wrap.append(h('p', 'note', 'Started by this request.'));
+    if (found.before && !found.after) wrap.append(h('p', 'note', 'Ended by this request.'));
+    const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
+    if (!keys.length) { wrap.append(h('p', 'empty', 'The session is empty.')); return wrap; }
+    const list = h('div', 'gloss-debug-rows');
+    for (const key of keys) {
+      const row = h('div', 'gloss-debug-session');
+      const was = before[key];
+      const now = after[key];
+      let change = '';
+      if (found.before && found.after) {
+        if (was === undefined) change = 'added';
+        else if (now === undefined) change = 'removed';
+        else if (was !== now) change = 'changed';
+      }
+      row.append(
+        h('span', 'key', key),
+        h('span', 'value', now !== undefined ? now : was),
+        h('span', change ? 'warn' : '', change),
+      );
+      if (change === 'changed') row.title = 'was ' + was;
+      list.append(row);
+    }
+    wrap.append(list);
+    return wrap;
+  }
+
   function requestList(requests) {
     if (!requests.length) return h('p', 'empty', 'No requests recorded.');
     const list = h('div', 'gloss-debug-rows');
@@ -526,7 +596,8 @@ const script =
       return;
     }
     if (!data) { body.append(h('p', 'empty', 'Loading...')); return; }
-    body.append(tab === 'queries' ? queryList(data.items) : tab === 'logs' ? logList(data.items) : timeline(data.items));
+    const view = { queries: queryList, logs: logList, session: sessionView }[tab] || timeline;
+    body.append(view(data.items));
   }
 
   async function load(id) {
@@ -577,6 +648,9 @@ const stylesheet =
 .gloss-debug-log .meta { grid-column: 3; color: #a0a4ab; word-break: break-word; }
 .gloss-debug-log.level-warning .level { color: #f2cc60; }
 .gloss-debug-log.level-error .level { color: #ff7b72; }
+.gloss-debug-session { display: grid; grid-template-columns: minmax(80px, 25%) minmax(0, 1fr) 70px; gap: 8px; padding: 2px 0; }
+.gloss-debug-session .key { color: #a0a4ab; }
+.gloss-debug-session .value { word-break: break-all; }
 .gloss-debug-request { background: none; display: grid; grid-template-columns: 90px 40px minmax(0, 1fr) 70px; gap: 8px; padding: 3px 4px; border-radius: 4px; text-align: left; }
 .gloss-debug-request:hover, .gloss-debug-request.active { background: #23262c; }
 .gloss-debug-request .message { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

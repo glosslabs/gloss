@@ -1,14 +1,18 @@
+import gleam/dict
 import gleam/dynamic/decode
 import gleam/http
 import gleam/http/request
 import gleam/json
 import gleam/list
+import gleam/option.{None, Some}
 import gleam/string
 import gloss/http/context
 import gloss/http/debug_bar.{type DebugBar}
 import gloss/http/reply
 import gloss/http/router
 import gloss/http/server
+import gloss/http/session
+import gloss/http/session/memory
 import gloss/meta
 import gloss/tracer
 import http_support.{header, rendered_body, request}
@@ -109,4 +113,70 @@ pub fn logs_outside_a_request_are_ignored_test() {
   let _ = request.new()
   assert rendered_body(get(bar, "/_gloss/debug/traces/none"))
     == "{\"trace_id\":\"none\",\"items\":[]}"
+}
+
+fn session_app(bar: DebugBar) {
+  let assert Ok(store) = memory.start()
+  router.new()
+  |> router.post("/login", fn(req, ctx: context.Context(Nil)) {
+    use s <- session.load(req, ctx.sessions)
+    s
+    |> session.regenerate
+    |> session.set("user_id", "7")
+    |> session.save(reply.html(200, page))
+  })
+  |> router.get("/plain", fn(_, _) { reply.html(200, page) })
+  |> server.new(Nil)
+  |> server.sessions(session.new(store))
+  |> server.tracer(tracer.new() |> tracer.handle(debug_bar.handler(bar)))
+  |> server.with(debug_bar.middleware(bar))
+}
+
+fn session_item(app, trace_id: String) {
+  let res =
+    server.handle(app, request(http.Get, "/_gloss/debug/traces/" <> trace_id))
+  let data = decode.optional(decode.dict(decode.string, decode.string))
+  let item = {
+    use kind <- decode.field("kind", decode.string)
+    case kind {
+      "session" -> {
+        use before <- decode.field("before", data)
+        use after <- decode.field("after", data)
+        decode.success(Ok(#(before, after)))
+      }
+      _ -> decode.success(Error(Nil))
+    }
+  }
+  let assert Ok(items) =
+    json.parse(rendered_body(res), decode.at(["items"], decode.list(item)))
+  list.filter_map(items, fn(i) { i })
+}
+
+pub fn the_session_before_and_after_is_recorded_test() {
+  let assert Ok(bar) = debug_bar.start()
+  let app = session_app(bar)
+
+  // Signing in starts a session.
+  let res = server.handle(app, request(http.Post, "/login"))
+  let assert Ok(cookie) = list.key_find(res.headers, "set-cookie")
+  let assert [#(None, Some(after))] =
+    session_item(app, header(res, "x-request-id"))
+  assert dict.to_list(after) == [#("user_id", "7")]
+
+  // A later request sees it unchanged.
+  let assert Ok(#(_, id)) = string.split_once(cookie, "=")
+  let assert Ok(#(id, _)) = string.split_once(id, ";")
+  let res =
+    server.handle(
+      app,
+      request(http.Get, "/plain")
+        |> request.set_header("cookie", "session=" <> id),
+    )
+  let assert [#(Some(before), Some(after))] =
+    session_item(app, header(res, "x-request-id"))
+  assert before == after
+
+  // No session, nothing recorded.
+  let res = server.handle(app, request(http.Get, "/plain"))
+  assert session_item(app, header(res, "x-request-id")) == []
 }

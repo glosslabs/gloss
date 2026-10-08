@@ -33,7 +33,9 @@ import gleam/bit_array
 import gleam/crypto
 import gleam/dict.{type Dict}
 import gleam/float
+import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/string
 import gleam/time/duration.{type Duration}
 import gleam/time/timestamp.{type Timestamp}
 import gloss/clock.{type Clock}
@@ -184,6 +186,51 @@ pub fn destroy(session: Session, res: Response) -> Response {
     None -> Nil
   }
   cookie.delete(res, session.sessions.cookie_name, session.sessions.attributes)
+}
+
+/// The request's session data as stored before the request (from its
+/// cookie) or after it (from the cookie the response sets, else the
+/// request's). `None` when there is no live session. For gloss/http's
+/// debug bar.
+@internal
+pub fn peek(
+  sessions: Sessions,
+  req: Request,
+  res: Option(Response),
+) -> Option(Dict(String, String)) {
+  let id = case res {
+    Some(res) ->
+      case response_cookie(res, sessions.cookie_name) {
+        Ok("") -> Error(Nil)
+        Ok(id) -> Ok(id)
+        Error(Nil) -> cookie.get(req, sessions.cookie_name)
+      }
+    None -> cookie.get(req, sessions.cookie_name)
+  }
+  case id {
+    Ok(id) ->
+      sessions.store.load(id, clock.now(sessions.clock)) |> option.from_result
+    Error(Nil) -> None
+  }
+}
+
+/// The value a response's `set-cookie` gives cookie `name`.
+fn response_cookie(res: Response, name: String) -> Result(String, Nil) {
+  res.headers
+  |> list.find_map(fn(header) {
+    case header {
+      #("set-cookie", value) ->
+        case string.split_once(value, "=") {
+          Ok(#(cookie_name, rest)) if cookie_name == name ->
+            case string.split_once(rest, ";") {
+              Ok(#(value, _)) -> Ok(value)
+              Error(Nil) -> Ok(rest)
+            }
+          _ -> Error(Nil)
+        }
+      _ -> Error(Nil)
+    }
+  })
 }
 
 fn attributes(session: Session) -> Attributes {

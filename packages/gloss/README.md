@@ -92,7 +92,7 @@ larger apps can give separate route groups their own state.
 | `gloss/http/session` | Server-side sessions: `load`, `get`/`set`/`remove`, `save`, `regenerate`, `destroy`, over a pluggable `Store` |
 | `gloss/http/session/memory` | The default store: an ETS table swept of expired sessions every minute |
 | `gloss/http/csrf` | Cross-site request forgery protection from `Sec-Fetch-Site` and `Origin`, with no tokens |
-| `gloss/http/debug_bar` | Development panel on HTML pages: the request's timeline, queries, logs, and recent requests (`start`, `handler`, `logger`, `middleware`) |
+| `gloss/http/debug_bar` | Development panel on HTML pages: the request's timeline, queries, logs, session, and recent requests (`start`, `handler`, `logger`, `middleware`) |
 | `gloss/http/static` | Files from a directory via `sendfile`, with content types, ETag revalidation, byte ranges (including multipart) for media, pre-compressed `.br`/`.gz` copies, `cache-control`, directory indexes and a single-page-app fallback |
 | `gloss/http/sse` | Server-sent events over a streamed response |
 | `gloss/http/compress` | gzip middleware for JSON, text and streamed responses, by `accept-encoding` |
