@@ -18,16 +18,37 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project:
-          [
-            packages/gloss,
-            packages/gloss_sentry,
-            packages/gloss_pg,
-            packages/gloss_test,
-            template,
-            examples/json_api,
-            examples/forum,
-          ]
+        # Flags: `js` also runs the tests on JavaScript; `node` and `npm` set
+        # up Node (and its packages) for JavaScript-target projects; `mysql`,
+        # `redis` and `s3` start those services for integration tests.
+        include:
+          - project: packages/gloss
+          - project: packages/gloss_sql
+            js: true
+          - project: packages/gloss_url
+            js: true
+          - project: packages/gloss_sql_async
+            node: true
+          - project: packages/gloss_pg
+          - project: packages/gloss_mysql
+            mysql: true
+          - project: packages/gloss_sqlite
+          - project: packages/gloss_sqlite_wasm
+            node: true
+            npm: true
+          - project: packages/gloss_pglite
+            node: true
+            npm: true
+          - project: packages/gloss_redis
+            redis: true
+          - project: packages/gloss_s3
+            s3: true
+          - project: packages/gloss_sentry
+          - project: packages/gloss_otel
+          - project: packages/gloss_test
+          - project: template
+          - project: examples/json_api
+          - project: examples/forum
     services:
       postgres:
         image: postgres:17
@@ -48,6 +69,11 @@ jobs:
 
       - uses: jdx/mise-action@v2
 
+      - if: matrix.js || matrix.node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - uses: actions/cache@v4
         with:
           path: |
@@ -55,7 +81,46 @@ jobs:
             ${{ matrix.project }}/build/packages
           key: gleam-${{ matrix.project }}-${{ hashFiles(format('{0}/manifest.toml', matrix.project)) }}
 
+      - if: matrix.npm
+        run: npm ci
+
+      - name: Start MySQL
+        if: matrix.mysql
+        run: |
+          docker run -d --name mysql -p 3307:3306 \
+            -e MYSQL_ROOT_PASSWORD=secret -e MYSQL_DATABASE=gloss mysql:8.4
+          for i in $(seq 1 60); do
+            docker exec mysql mysqladmin ping -uroot -psecret --silent && break
+            sleep 2
+          done
+          sleep 5
+          echo "GLOSS_TEST_MYSQL_URL=mysql://root:secret@127.0.0.1:3307/gloss" >> "$GITHUB_ENV"
+          echo "GLOSS_TEST_MYSQL_TLS=1" >> "$GITHUB_ENV"
+
+      - name: Start Redis
+        if: matrix.redis
+        run: |
+          docker run -d -p 6390:6379 redis:7
+          docker run -d -p 6391:6379 redis:7 redis-server --requirepass s3cret
+          sleep 3
+          echo "GLOSS_TEST_REDIS_URL=redis://127.0.0.1:6390/0" >> "$GITHUB_ENV"
+          echo "GLOSS_TEST_REDIS_AUTH_URL=redis://:s3cret@127.0.0.1:6391/0" >> "$GITHUB_ENV"
+
+      - name: Start an S3-compatible server
+        if: matrix.s3
+        run: |
+          docker run -d -p 9010:9000 \
+            -e RUSTFS_ACCESS_KEY=gloss -e RUSTFS_SECRET_KEY=glosssecret rustfs/rustfs
+          for i in $(seq 1 30); do
+            curl -s -o /dev/null http://127.0.0.1:9010 && break
+            sleep 1
+          done
+          echo "GLOSS_TEST_S3_ENDPOINT=http://localhost:9010" >> "$GITHUB_ENV"
+
       - run: gleam deps download
       - run: gleam format --check src test
       - run: gleam build --warnings-as-errors
       - run: gleam test
+
+      - if: matrix.js
+        run: gleam test --target javascript
